@@ -131,37 +131,329 @@ enable_basic_fallback() {
   log_msg "BASIC-only fallback active"
 }
 
-force_tangorpro_canary() {
-  PIF_PROP="$PIF_DIR/custom.pif.prop"
-  [ -f "$PIF_PROP" ] || return 0
-  [ -f /data/adb/omk_pif_sync_no_tangorpro ] && return 0
+get_profile_candidates() {
+  sdk=$(getprop ro.build.version.sdk 2>/dev/null)
+  [ -n "$sdk" ] || sdk=33
+  if [ "$sdk" -ge 37 ]; then
+    cat <<'EOF'
+kodiak|kodiak_beta|Pixel 11 Pro XL|37
+grizzly|grizzly_beta|Pixel 11 Pro|37
+cubs|cubs_beta|Pixel 11|37
+frankel|frankel_beta|Pixel 10|36
+tegu|tegu_beta|Pixel 9a|35
+EOF
+  elif [ "$sdk" -eq 36 ]; then
+    cat <<'EOF'
+frankel|frankel_beta|Pixel 10|36
+blazer|blazer_beta|Pixel 10 Pro|36
+mustang|mustang_beta|Pixel 10 Pro XL|36
+kodiak|kodiak_beta|Pixel 11 Pro XL|37
+tegu|tegu_beta|Pixel 9a|35
+EOF
+  elif [ "$sdk" -eq 35 ]; then
+    cat <<'EOF'
+tegu|tegu_beta|Pixel 9a|35
+komodo|komodo_beta|Pixel 9 Pro XL|34
+caiman|caiman_beta|Pixel 9 Pro|34
+frankel|frankel_beta|Pixel 10|36
+tangorpro|tangorpro_beta|Pixel Tablet|33
+EOF
+  else
+    cat <<'EOF'
+tangorpro|tangorpro_beta|Pixel Tablet|33
+felix|felix_beta|Pixel Fold|33
+komodo|komodo_beta|Pixel 9 Pro XL|34
+husky|husky_beta|Pixel 8 Pro|34
+bluejay|bluejay_beta|Pixel 6a|32
+kodiak|kodiak_beta|Pixel 11 Pro XL|37
+EOF
+  fi
+}
 
-  REL=$(read_pif_val RELEASE "$PIF_PROP")
+fetch_canary_for_product() {
+  prod=$1
+  flash_html="/data/local/tmp/omk_flash.$$"
+  station_json="/data/local/tmp/omk_station.$$"
+  if download_url "https://flash.android.com/" > "$flash_html" 2>/dev/null; then
+    api_key=$(grep -o '<body data-client-config=.*' "$flash_html" | cut -d';' -f2 | cut -d'&' -f1)
+    if [ -n "$api_key" ]; then
+      url="https://content-flashstation-pa.googleapis.com/v1/builds?product=${prod}&key=${api_key}"
+      if command -v curl >/dev/null 2>&1; then
+        curl --connect-timeout 10 --max-time 20 -fsSL -H "Referer: https://flash.android.com" "$url" > "$station_json" 2>/dev/null || true
+      else
+        for bb in /data/adb/ksu/bin/busybox /data/adb/magisk/busybox /data/adb/ap/bin/busybox busybox; do
+          if command -v "$bb" >/dev/null 2>&1; then
+            "$bb" wget -T 15 --no-check-certificate --header="Referer: https://flash.android.com" -qO "$station_json" "$url" 2>/dev/null || true
+            break
+          fi
+        done
+      fi
+      if [ -s "$station_json" ]; then
+        tac_block=$(awk '{a[NR]=$0} END{for(i=NR;i>=1;i--) print a[i]}' "$station_json" | grep -m1 -A13 '"canary": true')
+        c_id=$(printf '%s\n' "$tac_block" | grep 'releaseCandidateName' | cut -d'"' -f4 | head -n 1)
+        c_inc=$(printf '%s\n' "$tac_block" | grep 'buildId' | cut -d'"' -f4 | head -n 1)
+        rm -f "$flash_html" "$station_json"
+        if [ -n "$c_id" ] && [ -n "$c_inc" ]; then
+          printf '%s|%s\n' "$c_id" "$c_inc"
+          return 0
+        fi
+      fi
+    fi
+  fi
+  rm -f "$flash_html" "$station_json"
+  return 1
+}
+
+apply_pif_profile() {
+  dev=$1; prod=$2; model=$3; sdk_init=$4
+  PIF_PROP="$PIF_DIR/custom.pif.prop"
+  [ -f "$PIF_PROP" ] || return 1
+
+  REL=$(read_pif_val RELEASE "$PIF_PROP"); [ -n "$REL" ] || REL=CANARY
   BID=$(read_pif_val ID "$PIF_PROP")
   INC=$(read_pif_val INCREMENTAL "$PIF_PROP")
-  TYP=$(read_pif_val TYPE "$PIF_PROP")
-  TGS=$(read_pif_val TAGS "$PIF_PROP")
-  [ -n "$REL" ] && [ -n "$BID" ] && [ -n "$INC" ] || return 0
-  [ -n "$TYP" ] || TYP=user
-  [ -n "$TGS" ] || TGS=release-keys
-  NEW_FP="google/tangorpro_beta/tangorpro:${REL}/${BID}/${INC}:${TYP}/${TGS}"
+  TYP=$(read_pif_val TYPE "$PIF_PROP"); [ -n "$TYP" ] || TYP=user
+  TGS=$(read_pif_val TAGS "$PIF_PROP"); [ -n "$TGS" ] || TGS=release-keys
 
+  live_pair=$(fetch_canary_for_product "$prod" 2>/dev/null || true)
+  if [ -n "$live_pair" ]; then
+    BID=${live_pair%|*}
+    INC=${live_pair#*|}
+  fi
+  [ -n "$BID" ] && [ -n "$INC" ] || return 1
+
+  NEW_FP="google/${prod}/${dev}:${REL}/${BID}/${INC}:${TYP}/${TGS}"
   tmp="${PIF_PROP}.tmp.$$"
-  awk -v fp="$NEW_FP" '
-    /^MODEL=/ { print "MODEL=Pixel Tablet"; next }
-    /^DEVICE=/ { print "DEVICE=tangorpro"; next }
-    /^PRODUCT=/ { print "PRODUCT=tangorpro_beta"; next }
+  awk -v mod="$model" -v d="$dev" -v p="$prod" -v fp="$NEW_FP" -v bid="$BID" -v inc="$INC" -v sdk="$sdk_init" '
+    /^MODEL=/ { print "MODEL=" mod; next }
+    /^DEVICE=/ { print "DEVICE=" d; next }
+    /^PRODUCT=/ { print "PRODUCT=" p; next }
+    /^ID=/ { print "ID=" bid; next }
+    /^INCREMENTAL=/ { print "INCREMENTAL=" inc; next }
     /^FINGERPRINT=/ { print "FINGERPRINT=" fp; next }
-    /^DEVICE_INITIAL_SDK_INT=/ { print "DEVICE_INITIAL_SDK_INT=33"; next }
+    /^DEVICE_INITIAL_SDK_INT=/ { print "DEVICE_INITIAL_SDK_INT=" sdk; next }
     /^ro\.build\.fingerprint=/ { print "ro.build.fingerprint=" fp; next }
-    /^ro\.product\.device=/ { print "ro.product.device=tangorpro"; next }
-    /^ro\.product\.name=/ { print "ro.product.name=tangorpro_beta"; next }
-    /^ro\.product\.first_api_level=/ { print "ro.product.first_api_level=33"; next }
+    /^ro\.build\.id=/ { print "ro.build.id=" bid; next }
+    /^ro\.product\.device=/ { print "ro.product.device=" d; next }
+    /^ro\.product\.name=/ { print "ro.product.name=" p; next }
+    /^ro\.product\.first_api_level=/ { print "ro.product.first_api_level=" sdk; next }
     /^spoofVendingFinger=/ { print "spoofVendingFinger=1"; next }
     { print }
   ' "$PIF_PROP" > "$tmp" && mv "$tmp" "$PIF_PROP"
   chmod 0644 "$PIF_PROP"
-  log_msg "Pinned Canary profile to tangorpro (Pixel Tablet): $NEW_FP"
+  log_msg "Applied Canary profile: $model ($dev, API $sdk_init): $NEW_FP"
+}
+
+select_compatible_canary() {
+  PIF_PROP="$PIF_DIR/custom.pif.prop"
+  [ -f "$PIF_PROP" ] || return 0
+  if [ -f /data/adb/omk_pif_sync_no_tangorpro ] || [ -f /data/adb/omk_pif_sync_no_pin ]; then
+    return 0
+  fi
+
+  first_line=$(get_profile_candidates | head -n 1)
+  old_ifs="$IFS"; IFS='|'; set -- $first_line; IFS="$old_ifs"
+  apply_pif_profile "$1" "$2" "$3" "$4"
+}
+
+force_tangorpro_canary() {
+  select_compatible_canary
+}
+
+ensure_play_developer_mode() {
+  pref="/data/data/com.android.vending/shared_prefs/vending_preferences.xml"
+  [ -f "$pref" ] || return 0
+  if grep -q 'name="developer_settings" value="true"' "$pref" 2>/dev/null; then
+    return 0
+  fi
+  am force-stop com.android.vending >/dev/null 2>&1 || true
+  uid_gid=$(stat -c '%u:%g' "$pref" 2>/dev/null || echo "")
+  if grep -q 'name="developer_settings"' "$pref" 2>/dev/null; then
+    sed -i 's/name="developer_settings" value="false"/name="developer_settings" value="true"/' "$pref"
+  else
+    sed -i 's|</map>|    <boolean name="developer_settings" value="true" />\n</map>|' "$pref"
+  fi
+  [ -n "$uid_gid" ] && chown "$uid_gid" "$pref" 2>/dev/null || true
+  chmod 0660 "$pref" 2>/dev/null || true
+  log_msg "Enabled Play Store Developer options in vending_preferences.xml"
+}
+
+check_play_integrity() {
+  ensure_play_developer_mode
+  am force-stop com.android.vending >/dev/null 2>&1 || true
+  killall com.google.android.gms.unstable >/dev/null 2>&1 || true
+  sleep 1
+
+  sz=$(wm size 2>/dev/null | tail -n 1 | grep -oE '[0-9]+x[0-9]+' | head -n 1)
+  SW=${sz%x*}; SH=${sz#*x}
+  [ -n "$SW" ] || SW=1080; [ -n "$SH" ] || SH=2400
+
+  input keyevent 224 >/dev/null 2>&1 || true
+  monkey -p com.android.vending -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1
+  sleep 2
+
+  wait_tap_re() {
+    pat=$1; scroll=${2:-0}; tries=${3:-10}; i=0
+    while [ "$i" -lt "$tries" ]; do
+      uiautomator dump /data/local/tmp/omk_ui.xml >/dev/null 2>&1 || true
+      if [ -s /data/local/tmp/omk_ui.xml ]; then
+        b=$(tr '>' '\n' < /data/local/tmp/omk_ui.xml | grep -E "$pat" | head -n 1 | sed -n 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\]\[\([0-9]*\),\([0-9]*\)\]".*/\1 \2 \3 \4/p')
+        rm -f /data/local/tmp/omk_ui.xml
+        if [ -n "$b" ]; then
+          set -- $b
+          input tap $(( ($1 + $3) / 2 )) $(( ($2 + $4) / 2 ))
+          return 0
+        fi
+      fi
+      if [ "$scroll" = "1" ] && [ "$i" -ge 1 ]; then
+        input swipe $((SW / 2)) $((SH * 7 / 10)) $((SW / 2)) $((SH * 3 / 10)) 250
+      fi
+      i=$((i + 1))
+      sleep 1
+    done
+    return 1
+  }
+
+  # 1. Open Account menu (EN/RU or top-right fallback)
+  if ! wait_tap_re 'Account and settings|Аккаунт и настройки|Signed in as|Вход выполнен|Управление аккаунтом Google' 0 8; then
+    input tap $((SW * 92 / 100)) $((SH * 7 / 100))
+  fi
+  sleep 1
+
+  # 2. Settings -> General -> Developer options -> Check integrity (EN + RU)
+  wait_tap_re 'text="Settings"|text="Настройки"' 1 8 || { am force-stop com.android.vending >/dev/null 2>&1 || true; echo "RESULT_VERDICT=ERROR"; echo "RESULT_LABELS=Не найден пункт Настройки"; return 1; }
+  wait_tap_re 'text="General"|text="Общие"' 0 6 || { am force-stop com.android.vending >/dev/null 2>&1 || true; echo "RESULT_VERDICT=ERROR"; echo "RESULT_LABELS=Не найден пункт Общие"; return 1; }
+  wait_tap_re 'text="Developer options"|text="Для разработчиков"' 1 8 || { am force-stop com.android.vending >/dev/null 2>&1 || true; echo "RESULT_VERDICT=ERROR"; echo "RESULT_LABELS=Не найден пункт Для разработчиков"; return 1; }
+  wait_tap_re 'text="Check integrity"|text="Проверить целостность"' 1 8 || { am force-stop com.android.vending >/dev/null 2>&1 || true; echo "RESULT_VERDICT=ERROR"; echo "RESULT_LABELS=Не найдена кнопка Check integrity"; return 1; }
+
+  labels=""
+  fp=""
+  w=0
+  while [ "$w" -lt 12 ]; do
+    sleep 1
+    uiautomator dump /data/local/tmp/omk_ui.xml >/dev/null 2>&1 || true
+    if [ -s /data/local/tmp/omk_ui.xml ]; then
+      dump_lines=$(tr '>' '\n' < /data/local/tmp/omk_ui.xml | grep -oE 'text="[^"]+"')
+      rm -f /data/local/tmp/omk_ui.xml
+      labels=$(printf '%s\n' "$dump_lines" | grep -E 'Labels:|Метки:|MEETS_' | head -n 1 | sed 's/^text="//; s/"$//')
+      fp=$(printf '%s\n' "$dump_lines" | grep -E 'Build fingerprint:|Цифровой отпечаток:' | head -n 1 | sed 's/^text="//; s/"$//')
+      if [ -n "$labels" ]; then
+        break
+      fi
+    fi
+    w=$((w + 1))
+  done
+
+  # Close Play Store so user drops straight back into WebUI
+  am force-stop com.android.vending >/dev/null 2>&1 || true
+
+  verdict="NONE"
+  case "$labels" in
+    *MEETS_STRONG_INTEGRITY*) verdict="STRONG" ;;
+    *MEETS_DEVICE_INTEGRITY*) verdict="DEVICE" ;;
+    *MEETS_BASIC_INTEGRITY*) verdict="BASIC" ;;
+    "") verdict="ERROR" ;;
+  esac
+
+  dev_now=$(read_pif_val DEVICE "$PIF_DIR/custom.pif.prop" 2>/dev/null || echo "-")
+  sdk_now=$(read_pif_val DEVICE_INITIAL_SDK_INT "$PIF_DIR/custom.pif.prop" 2>/dev/null || echo "-")
+  log_msg "Play Integrity check: verdict=$verdict profile=$dev_now(SDK $sdk_now) $labels"
+  echo "RESULT_VERDICT=$verdict"
+  echo "RESULT_PROFILE=$dev_now (SDK $sdk_now)"
+  echo "RESULT_LABELS=${labels:-нет ответа}"
+  echo "RESULT_FP=${fp:-}"
+  [ "$verdict" = "STRONG" ] || [ "$verdict" = "DEVICE" ]
+}
+
+verify_and_autofix_fingerprint() {
+  log_msg "Starting Play Integrity check & automatic fingerprint selection..."
+  inj_state=$(grep -m1 '^enabled =' "$OMK_INJ" 2>/dev/null | awk '{print $3}')
+  want_strong=1
+  [ "$inj_state" = "false" ] && want_strong=0
+
+  cur_out=$(check_play_integrity)
+  cur_v=$(printf '%s\n' "$cur_out" | sed -n 's/^RESULT_VERDICT=//p' | head -n 1)
+  if [ "$cur_v" = "STRONG" ] || { [ "$want_strong" = "0" ] && [ "$cur_v" = "BASIC" ]; }; then
+    printf '%s\n' "$cur_out"
+    return 0
+  fi
+  if [ "$cur_v" = "DEVICE" ] && [ "$want_strong" = "0" ]; then
+    printf '%s\n' "$cur_out"
+    return 0
+  fi
+
+  best_out="$cur_out"
+  best_rank=0
+  case "$cur_v" in
+    DEVICE) best_rank=2 ;;
+    BASIC) best_rank=1 ;;
+  esac
+  cur_dev=$(read_pif_val DEVICE "$PIF_DIR/custom.pif.prop" 2>/dev/null || echo "")
+  cur_prod=$(read_pif_val PRODUCT "$PIF_DIR/custom.pif.prop" 2>/dev/null || echo "")
+  cur_model=$(read_pif_val MODEL "$PIF_DIR/custom.pif.prop" 2>/dev/null || echo "")
+  cur_sdk=$(read_pif_val DEVICE_INITIAL_SDK_INT "$PIF_DIR/custom.pif.prop" 2>/dev/null || echo "")
+  best_row="${cur_dev}|${cur_prod}|${cur_model}|${cur_sdk}"
+  last_row="$best_row"
+
+  cand_list=$(get_profile_candidates)
+  old_ifs="$IFS"
+  IFS='
+'
+  for row in $cand_list; do
+    IFS="$old_ifs"
+    d=$(printf '%s' "$row" | cut -d'|' -f1)
+    p=$(printf '%s' "$row" | cut -d'|' -f2)
+    m=$(printf '%s' "$row" | cut -d'|' -f3)
+    s=$(printf '%s' "$row" | cut -d'|' -f4)
+    if [ "$d" = "$cur_dev" ]; then
+      IFS='
+'
+      continue
+    fi
+    log_msg "Rotating fingerprint candidate: $m ($d, SDK $s)..."
+    apply_pif_profile "$d" "$p" "$m" "$s" || { IFS='
+'; continue; }
+    last_row="$row"
+    sync_omk_config >/dev/null 2>&1 || true
+    reload_omk
+    out=$(check_play_integrity)
+    v=$(printf '%s\n' "$out" | sed -n 's/^RESULT_VERDICT=//p' | head -n 1)
+    if [ "$v" = "STRONG" ]; then
+      printf '%s\n' "$out"
+      return 0
+    fi
+    rank=0
+    case "$v" in
+      DEVICE) rank=2 ;;
+      BASIC) rank=1 ;;
+    esac
+    if [ "$rank" -gt "$best_rank" ]; then
+      best_rank=$rank
+      best_out="$out"
+      best_row="$row"
+    fi
+    if [ "$v" = "DEVICE" ] && [ "$want_strong" = "0" ]; then
+      printf '%s\n' "$out"
+      return 0
+    fi
+    IFS='
+'
+  done
+  IFS="$old_ifs"
+
+  if [ "$best_row" != "$last_row" ] && [ -n "${best_row%%|*}" ]; then
+    d=$(printf '%s' "$best_row" | cut -d'|' -f1)
+    p=$(printf '%s' "$best_row" | cut -d'|' -f2)
+    m=$(printf '%s' "$best_row" | cut -d'|' -f3)
+    s=$(printf '%s' "$best_row" | cut -d'|' -f4)
+    apply_pif_profile "$d" "$p" "$m" "$s" >/dev/null 2>&1 || true
+    sync_omk_config >/dev/null 2>&1 || true
+    reload_omk
+  fi
+
+  printf '%s\n' "$best_out"
+  best_v=$(printf '%s\n' "$best_out" | sed -n 's/^RESULT_VERDICT=//p' | head -n 1)
+  [ "$best_v" = "STRONG" ] || [ "$best_v" = "DEVICE" ]
 }
 
 run_pif() {

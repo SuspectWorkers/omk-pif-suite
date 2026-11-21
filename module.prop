@@ -1,6 +1,6 @@
 id=omk_pif_suite
 name=OMK PIF Suite
-version=v1.3.1
-versionCode=131
+version=v1.4.0
+versionCode=140
 author=SuspectWorkers
-description=All-in-one Play Integrity manager & WebUI (Basic & PRO modes): multi-provider keybox cascade (Specter/TAKR, MeowDump, Yurikey), Google CRL check with auto-BASIC fallback, SweetAlert2 neon result overlay, and Oh My KeyMint sync.
+description=All-in-one Play Integrity manager & WebUI (Basic & PRO modes): SDK-aware Pixel Canary selection (A13-A17+), live Play Store integrity check & auto-rotation, multi-provider keybox cascade, Google CRL check with auto-BASIC fallback, and Oh My KeyMint sync.

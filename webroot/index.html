@@ -64,7 +64,7 @@
     <section id="basicPanel" class="card basic-hero">
       <h2>Автоматическая настройка Play Integrity</h2>
       <p>
-        Скачивает свежий Canary-профиль, принудительно выставляет <strong>Pixel Tablet (tangorpro)</strong>,
+        Скачивает свежий Canary-профиль, автоматически подбирает устройство под версию Android устройства (A13–A17+),
         включает <code>spoofBuild</code>, <code>spoofProps</code>, <code>spoofVendingFinger</code>,
         ищет живой keybox по всем провайдерам (<strong>Specter/TAKR</strong>, <strong>MeowDump</strong>, <strong>Yurikey</strong>) с проверкой Google CRL — и автоматически включает режим <strong>BASIC</strong>, если все keybox отозваны.
       </p>
@@ -72,6 +72,7 @@
         Исправить Play Integrity (Full Sync)
       </button>
       <div class="basic-subactions">
+        <button class="btn btn-accent" id="btnBasicVerifyPi">Проверить Integrity + Автоподбор</button>
         <button class="btn btn-chip" id="btnBasicCheckCrl">Проверить Keybox (CRL)</button>
         <button class="btn btn-chip" id="btnBasicFallback">Режим только BASIC (без keybox)</button>
         <button class="btn btn-chip" id="btnToggleKeyboxBox">Вставить свой keybox.xml</button>
@@ -95,9 +96,12 @@
           </label>
         </div>
         <div class="presets">
-          <button class="btn btn-chip" data-preset="tangorpro">Pixel Tablet (tangorpro)</button>
-          <button class="btn btn-chip" data-preset="felix">Pixel Fold (felix)</button>
-          <button class="btn btn-chip" data-preset="bluejay">Pixel 6a (bluejay)</button>
+          <button class="btn btn-chip" data-preset="kodiak">Pixel 11 Pro XL (kodiak, A17)</button>
+          <button class="btn btn-chip" data-preset="frankel">Pixel 10 (frankel, A16)</button>
+          <button class="btn btn-chip" data-preset="tegu">Pixel 9a (tegu, A15)</button>
+          <button class="btn btn-chip" data-preset="tangorpro">Pixel Tablet (tangorpro, A13)</button>
+          <button class="btn btn-chip" data-preset="felix">Pixel Fold (felix, A13)</button>
+          <button class="btn btn-chip" data-preset="bluejay">Pixel 6a (bluejay, A12)</button>
           <button class="btn btn-chip" data-preset="omk_a13">OMK A13+</button>
           <button class="btn btn-chip" data-preset="pif_legacy">Legacy (&lt;A13)</button>
           <button class="btn btn-chip" data-preset="all_off">Выключить всё (0)</button>
@@ -138,7 +142,7 @@
           </div>
           <div class="switch-item">
             <div class="switch-info">
-              <strong>Не пинить tangorpro (no_tangorpro)</strong>
+              <strong>Отключить автоподбор профиля (no_pin)</strong>
               <span class="hint">Флаг <code>/data/adb/omk_pif_sync_no_tangorpro</code>: оставлять случайный профиль от autopif4</span>
             </div>
             <label class="toggle">
@@ -149,6 +153,8 @@
         </div>
         <div class="actions-row">
           <button class="btn btn-accent" id="btnOmkSync">Full Sync (action.sh)</button>
+          <button class="btn btn-primary" id="btnProCheckPi">Проверить Integrity (Play Store)</button>
+          <button class="btn btn-accent" id="btnProAutoPick">Автоподбор фингерпринта</button>
           <button class="btn btn-accent" id="btnSyncLocal">Синхр. PIF → OMK</button>
           <button class="btn btn-secondary" id="btnAutopif">autopif4 (-m)</button>
           <button class="btn btn-warn" id="btnKillPi">Kill GMS / Vending</button>

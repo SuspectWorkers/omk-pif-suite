@@ -617,6 +617,9 @@
   }
 
   function applyPreset(name) {
+    if (name === 'kodiak') return applyDevicePreset('kodiak', 'kodiak_beta', 'Pixel 11 Pro XL', '37');
+    if (name === 'frankel') return applyDevicePreset('frankel', 'frankel_beta', 'Pixel 10', '36');
+    if (name === 'tegu') return applyDevicePreset('tegu', 'tegu_beta', 'Pixel 9a', '35');
     if (name === 'tangorpro') return applyDevicePreset('tangorpro', 'tangorpro_beta', 'Pixel Tablet', '33');
     if (name === 'felix') return applyDevicePreset('felix', 'felix_beta', 'Pixel Fold', '33');
     if (name === 'bluejay') return applyDevicePreset('bluejay', 'bluejay_beta', 'Pixel 6a', '32');
@@ -648,6 +651,50 @@
     });
     if (result) {
       showResultOverlay(result.valid, result.title, result.subtitle, 3000);
+    }
+  }
+
+  async function runPlayStoreVerify(autoFix) {
+    let overlay = null;
+    const title = autoFix ? 'Проверка и автоподбор фингерпринта' : 'Проверка Play Integrity (Play Store)';
+    const sub = autoFix
+      ? 'Открываем Play Store и проверяем реальный вердикт (при BASIC — пробуем другие Pixel профили)...'
+      : 'Открываем Play Store Developer options → Check integrity...';
+    await withLoading(title, sub, async () => {
+      log(`Запуск: ${title}...`);
+      try {
+        const fn = autoFix ? 'verify_and_autofix_fingerprint' : 'check_play_integrity';
+        const res = await execRoot(`. "${SUITE_DIR}/common.sh" && ${fn}`);
+        const out = (res.stdout + '\n' + res.stderr).trim();
+        log(out);
+
+        const map = {};
+        out.split('\n').forEach(l => {
+          const idx = l.indexOf('=');
+          if (idx > 0 && l.startsWith('RESULT_')) map[l.slice(0, idx)] = l.slice(idx + 1).trim();
+        });
+        const v = map.RESULT_VERDICT || 'ERROR';
+        const prof = map.RESULT_PROFILE || state.build.DEVICE || '-';
+        const labels = map.RESULT_LABELS || '';
+        const passed = v === 'STRONG' || v === 'DEVICE';
+
+        await loadConfig();
+        await loadStatus();
+
+        overlay = {
+          valid: passed,
+          title: v === 'STRONG'
+            ? 'MEETS_STRONG_INTEGRITY'
+            : (v === 'DEVICE' ? 'MEETS_DEVICE_INTEGRITY' : `Play Integrity: ${v}`),
+          subtitle: `Профиль: ${prof} • ${labels}`
+        };
+      } catch (e) {
+        log('Ошибка проверки Play Integrity: ' + e.message);
+        overlay = { valid: false, title: 'Ошибка проверки', subtitle: e.message };
+      }
+    });
+    if (overlay) {
+      showResultOverlay(overlay.valid, overlay.title, overlay.subtitle, 3000);
     }
   }
 
@@ -753,12 +800,13 @@
       const cmd = `sh "${OMK_SYNC_ACT}" --basic`;
       runAction(
         'Basic Full Sync',
-        'Обновляем Canary (tangorpro), ищем живой keybox по провайдерам и синхронизируем OMK...',
+        'Обновляем Canary (под Android SDK устройства), ищем живой keybox и синхронизируем OMK...',
         cmd,
         { reloadAfter: true, checkCrl: true, autoFallbackOnRevoked: true, showOverlay: true }
       );
     });
 
+    document.getElementById('btnBasicVerifyPi').addEventListener('click', () => runPlayStoreVerify(true));
     document.getElementById('btnBasicCheckCrl').addEventListener('click', runCrlCheckWithOverlay);
 
     document.getElementById('btnBasicFallback').addEventListener('click', () => {
@@ -807,6 +855,8 @@
         { reloadAfter: true, checkCrl: true, autoFallbackOnRevoked: true, showOverlay: true }
       );
     });
+    document.getElementById('btnProCheckPi').addEventListener('click', () => runPlayStoreVerify(false));
+    document.getElementById('btnProAutoPick').addEventListener('click', () => runPlayStoreVerify(true));
     document.getElementById('btnSyncLocal').addEventListener('click', () => {
       runAction(
         'Синхронизация PIF → OMK',
