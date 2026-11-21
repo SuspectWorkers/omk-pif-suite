@@ -1,6 +1,6 @@
 id=omk_pif_suite
 name=OMK PIF Suite
-version=v1.2.0
-versionCode=120
+version=v1.3.0
+versionCode=130
 author=SuspectWorkers
-description=All-in-one Play Integrity manager & WebUI (Basic & PRO modes): phone-responsive UI, blocking spinner, tangorpro Canary pin, Oh My KeyMint sync, and Keybox CRL check.
+description=All-in-one Play Integrity manager & WebUI (Basic & PRO modes): multi-provider keybox cascade (Specter/TAKR, MeowDump, Yurikey), Google CRL check with auto-BASIC fallback, SweetAlert2 neon result overlay, and Oh My KeyMint sync.

@@ -32,7 +32,10 @@ MODDIR="${0%/*}"
     OLD_PIF=$(sha256sum "$PIF_DIR/custom.pif.prop" 2>/dev/null | awk '{print $1}')
     OLD_KB=$(sha256sum "$OMK_KEYBOX" 2>/dev/null | awk '{print $1}')
     run_pif
-    update_keybox
+    if ! update_keybox; then
+      validate_keybox_file "$OMK_KEYBOX"
+      [ "$?" -eq 1 ] && enable_basic_fallback
+    fi
     NEW_PIF=$(sha256sum "$PIF_DIR/custom.pif.prop" 2>/dev/null | awk '{print $1}')
     NEW_KB=$(sha256sum "$OMK_KEYBOX" 2>/dev/null | awk '{print $1}')
     if [ "$OLD_PIF" != "$NEW_PIF" ] || [ "$OLD_KB" != "$NEW_KB" ]; then

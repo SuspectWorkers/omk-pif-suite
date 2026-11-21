@@ -12,11 +12,32 @@ if [ "$BASIC_MODE" = "1" ]; then
   force_tangorpro_canary
   force_basic_settings
   FORCE_KEYBOX=1 update_keybox
+  kb_ok=$?
 else
   update_keybox
+  kb_ok=$?
 fi
+
 sync_omk_config || exit 1
 configure_zygisk_hide
-reload_omk
-cleanup_google
-log_msg "Action complete (basic=$BASIC_MODE)"
+
+if [ "$kb_ok" -ne 0 ]; then
+  validate_keybox_file "$OMK_KEYBOX"
+  v_rc=$?
+  if [ "$v_rc" -eq 1 ]; then
+    enable_basic_fallback
+    log_msg "Action complete (basic=$BASIC_MODE, fallback=BASIC)"
+  else
+    set_omk_injector_enabled true
+    set_pif_prop spoofProvider 0
+    reload_omk
+    cleanup_google
+    log_msg "Action complete (basic=$BASIC_MODE, keybox=KEPT_OFFLINE)"
+  fi
+else
+  set_omk_injector_enabled true
+  set_pif_prop spoofProvider 0
+  reload_omk
+  cleanup_google
+  log_msg "Action complete (basic=$BASIC_MODE, keybox=VALID)"
+fi

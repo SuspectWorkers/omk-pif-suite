@@ -8,6 +8,8 @@
   const OMK_INJ = '/data/misc/keystore/omk/injector.toml';
   const KEEP_KB_FLAG = '/data/adb/omk_pif_sync_keep_keybox';
   const NO_TANGOR_FLAG = '/data/adb/omk_pif_sync_no_tangorpro';
+  const PROVIDER_CFG = '/data/adb/omk_pif_sync_provider';
+  const CUSTOM_URL_CFG = '/data/adb/omk_pif_sync_keybox_url';
   const SYNC_LOG = '/data/local/tmp/omk_pif_sync.log';
   const MODE_KEY = 'omk_pif_suite_mode';
 
@@ -49,6 +51,7 @@
 
   let cbCounter = 0;
   let busyDepth = 0;
+  let resultTimerId = null;
 
   function log(msg) {
     const el = document.getElementById('consoleLog');
@@ -61,6 +64,50 @@
     try {
       if (window.ksu && typeof window.ksu.toast === 'function') window.ksu.toast(msg);
     } catch (_) {}
+  }
+
+  function hideResultOverlay() {
+    if (resultTimerId) {
+      clearTimeout(resultTimerId);
+      resultTimerId = null;
+    }
+    const overlay = document.getElementById('resultOverlay');
+    const fill = document.getElementById('resultTimerFill');
+    overlay.classList.add('hidden');
+    overlay.classList.remove('is-success', 'is-error');
+    fill.classList.remove('running');
+    if (busyDepth === 0) document.body.classList.remove('modal-open');
+  }
+
+  function showResultOverlay(isSuccess, title, subtitle = '', durationMs = 3000) {
+    hideResultOverlay();
+    const overlay = document.getElementById('resultOverlay');
+    const iconOk = document.getElementById('resultIconSuccess');
+    const iconErr = document.getElementById('resultIconError');
+    const fill = document.getElementById('resultTimerFill');
+
+    overlay.classList.toggle('is-success', !!isSuccess);
+    overlay.classList.toggle('is-error', !isSuccess);
+    iconOk.classList.toggle('hidden', !isSuccess);
+    iconErr.classList.toggle('hidden', !!isSuccess);
+
+    // Restart CSS keyframe animations cleanly
+    const activeIcon = isSuccess ? iconOk : iconErr;
+    activeIcon.style.animation = 'none';
+    activeIcon.offsetHeight;
+    activeIcon.style.animation = '';
+
+    document.getElementById('resultTitle').textContent = title;
+    document.getElementById('resultSub').textContent = subtitle;
+
+    fill.classList.remove('running');
+    fill.style.animationDuration = `${durationMs}ms`;
+    overlay.classList.remove('hidden');
+    document.body.classList.add('modal-open');
+    void fill.offsetWidth;
+    fill.classList.add('running');
+
+    resultTimerId = setTimeout(hideResultOverlay, durationMs);
   }
 
   function showLoading(title, sub = 'Пожалуйста, подождите...') {
@@ -131,29 +178,37 @@
     return { len, pos };
   }
 
-  function extractLeafSerialFromXml(xmlText) {
-    const m = /-----BEGIN CERTIFICATE-----\s*([\s\S]+?)\s*-----END CERTIFICATE-----/.exec(xmlText || '');
-    if (!m) return null;
-    const raw = atob(m[1].replace(/\s+/g, ''));
-    const bytes = new Uint8Array(raw.length);
-    for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-    let p = 0;
-    if (bytes[p++] !== 0x30) return null;
-    p = parseAsn1Len(bytes, p).pos;
-    if (bytes[p++] !== 0x30) return null;
-    p = parseAsn1Len(bytes, p).pos;
-    if (bytes[p] === 0xa0) {
-      p++;
-      const vLen = parseAsn1Len(bytes, p);
-      p = vLen.pos + vLen.len;
+  function extractAllCertSerialsFromXml(xmlText) {
+    const out = [];
+    const re = /-----BEGIN CERTIFICATE-----\s*([\s\S]+?)\s*-----END CERTIFICATE-----/g;
+    let m;
+    while ((m = re.exec(xmlText || '')) !== null) {
+      try {
+        const raw = atob(m[1].replace(/\s+/g, ''));
+        const bytes = new Uint8Array(raw.length);
+        for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+        let p = 0;
+        if (bytes[p++] !== 0x30) continue;
+        p = parseAsn1Len(bytes, p).pos;
+        if (bytes[p++] !== 0x30) continue;
+        p = parseAsn1Len(bytes, p).pos;
+        if (bytes[p] === 0xa0) {
+          p++;
+          const vLen = parseAsn1Len(bytes, p);
+          p = vLen.pos + vLen.len;
+        }
+        if (bytes[p++] !== 0x02) continue;
+        const sLen = parseAsn1Len(bytes, p);
+        const serialBytes = bytes.slice(sLen.pos, sLen.pos + sLen.len);
+        let hex = '';
+        for (const b of serialBytes) hex += b.toString(16).padStart(2, '0');
+        const trimmed = hex.replace(/^0+/, '') || '0';
+        let dec = '';
+        try { dec = BigInt('0x' + hex).toString(10); } catch (_) {}
+        out.push({ hex, trimmed, dec });
+      } catch (_) {}
     }
-    if (bytes[p++] !== 0x02) return null;
-    const sLen = parseAsn1Len(bytes, p);
-    const serialBytes = bytes.slice(sLen.pos, sLen.pos + sLen.len);
-    let hex = '';
-    for (const b of serialBytes) hex += b.toString(16).padStart(2, '0');
-    const trimmed = hex.replace(/^0+/, '') || '0';
-    return { hex, trimmed };
+    return out;
   }
 
   function parsePropText(text) {
@@ -342,6 +397,8 @@
         `echo "FAPI=$(getprop ro.product.first_api_level)"\n` +
         `echo "KEEPKB=$([ -f ${KEEP_KB_FLAG} ] && echo 1 || echo 0)"\n` +
         `echo "NOTANG=$([ -f ${NO_TANGOR_FLAG} ] && echo 1 || echo 0)"\n` +
+        `echo "PROV=$(cat ${PROVIDER_CFG} 2>/dev/null | tr -d '\\r\\n')"\n` +
+        `echo "CURL=$(cat ${CUSTOM_URL_CFG} 2>/dev/null | tr -d '\\r\\n')"\n` +
         `echo "KB=$([ -s ${OMK_KEYBOX} ] && echo present || echo missing)"`
       );
       const map = {};
@@ -365,6 +422,13 @@
       document.getElementById('stRomPatch').textContent = `${map.PATCH || '-'} / API ${map.FAPI || '-'}`;
       document.getElementById('chkKeepKeybox').checked = map.KEEPKB === '1';
       document.getElementById('chkNoTangorpro').checked = map.NOTANG === '1';
+      const provSel = document.getElementById('selProvider');
+      if (provSel) {
+        provSel.value = ['auto', 'specter', 'meowdump', 'yurikey', 'custom'].includes(map.PROV) ? map.PROV : 'auto';
+        document.getElementById('customProviderUrlRow').classList.toggle('hidden', provSel.value !== 'custom');
+      }
+      const urlInp = document.getElementById('customProviderUrl');
+      if (urlInp && map.CURL !== undefined) urlInp.value = map.CURL;
     } catch (e) {
       log('Статус: ' + e.message);
     }
@@ -389,7 +453,7 @@
     }
   }
 
-  async function checkKeyboxCrl(silent = false) {
+  async function checkKeyboxCrl({ silent = false, autoFallbackOnRevoked = false } = {}) {
     try {
       const kbRes = await execRoot(`cat "${OMK_KEYBOX}" 2>/dev/null || true`);
       const kbEl = document.getElementById('stKeybox');
@@ -397,32 +461,82 @@
         kbEl.textContent = 'нет keybox.xml';
         kbEl.className = 'stat-v badge-bad';
         if (!silent) log('Keybox отсутствует или пуст.');
-        return;
+        if (autoFallbackOnRevoked) {
+          await execRoot(`. "${SUITE_DIR}/common.sh" && enable_basic_fallback`);
+          await loadConfig();
+          await loadStatus();
+          return {
+            valid: false,
+            title: 'Keybox не найден',
+            subtitle: 'Автоматически включён режим только BASIC (без keybox)'
+          };
+        }
+        return { valid: false, title: 'Keybox отсутствует', subtitle: 'Файл keybox.xml пуст или не найден' };
       }
-      const serial = extractLeafSerialFromXml(kbRes.stdout);
-      if (!serial) {
+
+      const serials = extractAllCertSerialsFromXml(kbRes.stdout);
+      if (!serials.length) {
         kbEl.textContent = 'ошибка разбора XML';
         kbEl.className = 'stat-v badge-bad';
-        return;
+        return { valid: false, title: 'Ошибка Keybox', subtitle: 'Не удалось прочитать сертификаты из keybox.xml' };
       }
+
       const crlCmd =
-        `if command -v curl >/dev/null 2>&1; then curl -sL --connect-timeout 10 https://android.googleapis.com/attestation/status; ` +
+        `if command -v curl >/dev/null 2>&1; then curl -fsSL --connect-timeout 10 https://android.googleapis.com/attestation/status; ` +
         `else /data/adb/ksu/bin/busybox wget -T 10 --no-check-certificate -qO- https://android.googleapis.com/attestation/status; fi`;
       const crlRes = await execRoot(crlCmd);
       const crl = JSON.parse(crlRes.stdout);
-      const entry = (crl.entries && (crl.entries[serial.hex] || crl.entries[serial.trimmed])) || null;
-      kbEl.dataset.crlChecked = '1';
-      if (entry) {
-        kbEl.textContent = `REVOKED (${entry.reason || entry.status})`;
-        kbEl.className = 'stat-v badge-bad';
-        log(`Keybox ${serial.trimmed}: ОТОЗВАН Google CRL (${entry.status} / ${entry.reason || ''})! Нужен свежий keybox.xml (либо переключитесь на «Режим только BASIC»).`);
-      } else {
-        kbEl.textContent = `VALID (${serial.trimmed.slice(0, 8)}...)`;
-        kbEl.className = 'stat-v badge-ok';
-        log(`Keybox ${serial.trimmed}: ВАЛИДЕН (отсутствует в CRL Google).`);
+      const entries = crl.entries || {};
+
+      let revokedHit = null;
+      for (const s of serials) {
+        const entry = entries[s.hex] || entries[s.trimmed] || (s.dec ? entries[s.dec] : null) || null;
+        if (entry) {
+          revokedHit = { serial: s.trimmed, entry };
+          break;
+        }
       }
+
+      kbEl.dataset.crlChecked = '1';
+      const leafSerial = serials[0].trimmed;
+      if (revokedHit) {
+        const reason = revokedHit.entry.reason || revokedHit.entry.status || 'REVOKED';
+        kbEl.textContent = `REVOKED (${reason})`;
+        kbEl.className = 'stat-v badge-bad';
+        log(`Keybox ${revokedHit.serial}: ОТОЗВАН Google CRL (${revokedHit.entry.status} / ${revokedHit.entry.reason || ''})!`);
+        if (autoFallbackOnRevoked) {
+          log('Автопереключение в режим только BASIC (отключаем OMK injector, включаем spoofProvider=1)...');
+          await execRoot(`. "${SUITE_DIR}/common.sh" && enable_basic_fallback`);
+          await loadConfig();
+          await loadStatus();
+          return {
+            valid: false,
+            title: 'Keybox отозван (REVOKED)',
+            subtitle: `Серийный ${revokedHit.serial.slice(0, 12)}... (${reason}). Автоматически запущен режим только BASIC`
+          };
+        }
+        return {
+          valid: false,
+          title: 'Keybox отозван (REVOKED)',
+          subtitle: `Серийный ${revokedHit.serial.slice(0, 14)}... • Причина: ${reason}`
+        };
+      }
+
+      kbEl.textContent = `VALID (${leafSerial.slice(0, 8)}...)`;
+      kbEl.className = 'stat-v badge-ok';
+      log(`Keybox ${leafSerial} (все ${serials.length} серт.): ВАЛИДЕН (отсутствует в CRL Google).`);
+      return {
+        valid: true,
+        title: 'Keybox валиден (LIVE)',
+        subtitle: `Проверено сертификатов: ${serials.length} • Leaf: ${leafSerial.slice(0, 14)}...`
+      };
     } catch (e) {
       log('Проверка CRL не удалась: ' + e.message);
+      return {
+        valid: false,
+        title: 'Ошибка проверки CRL',
+        subtitle: e.message || 'Нет доступа к android.googleapis.com'
+      };
     }
   }
 
@@ -445,8 +559,9 @@
     });
   }
 
-  async function runAction(label, sub, cmd, reloadAfter = false, checkCrl = false) {
-    return withLoading(label, sub, async () => {
+  async function runAction(label, sub, cmd, { reloadAfter = false, checkCrl = false, autoFallbackOnRevoked = false, showOverlay = false } = {}) {
+    let crlResult = null;
+    await withLoading(label, sub, async () => {
       log(`Запуск: ${label}...`);
       try {
         const res = await execRoot(cmd);
@@ -458,13 +573,19 @@
           await loadStatus();
         }
         if (checkCrl) {
-          await checkKeyboxCrl(false);
+          crlResult = await checkKeyboxCrl({ silent: false, autoFallbackOnRevoked });
         }
       } catch (e) {
         log(`Ошибка (${label}): ${e.message}`);
         toast('Ошибка: ' + e.message);
+        if (showOverlay) {
+          crlResult = { valid: false, title: 'Ошибка выполнения', subtitle: e.message };
+        }
       }
     });
+    if (showOverlay && crlResult) {
+      showResultOverlay(crlResult.valid, crlResult.title, crlResult.subtitle, 3000);
+    }
   }
 
   function applyDevicePreset(dev, prod, model, sdk) {
@@ -520,7 +641,18 @@
     await loadStatus();
   }
 
+  async function runCrlCheckWithOverlay() {
+    let result = null;
+    await withLoading('Проверка Keybox в Google CRL', 'Сверяем все сертификаты цепочки...', async () => {
+      result = await checkKeyboxCrl({ silent: false, autoFallbackOnRevoked: false });
+    });
+    if (result) {
+      showResultOverlay(result.valid, result.title, result.subtitle, 3000);
+    }
+  }
+
   function initEvents() {
+    document.getElementById('resultOverlay').addEventListener('click', hideResultOverlay);
     document.getElementById('modeBasicBtn').addEventListener('click', () => setMode('basic'));
     document.getElementById('modeProBtn').addEventListener('click', () => setMode('pro'));
 
@@ -535,6 +667,21 @@
 
     document.querySelectorAll('[data-preset]').forEach(btn => {
       btn.addEventListener('click', () => applyPreset(btn.dataset.preset));
+    });
+
+    document.getElementById('selProvider').addEventListener('change', async e => {
+      const val = e.target.value;
+      document.getElementById('customProviderUrlRow').classList.toggle('hidden', val !== 'custom');
+      await execRoot(`mkdir -p /data/adb && printf '%s' '${val}' > "${PROVIDER_CFG}"`);
+      log(`Провайдер keybox установлен: ${val}`);
+    });
+
+    document.getElementById('btnSaveProviderUrl').addEventListener('click', async () => {
+      const url = document.getElementById('customProviderUrl').value.trim();
+      const b64 = toBase64Utf8(url);
+      await execRoot(`mkdir -p /data/adb && printf '%s' '${b64}' | base64 -d > "${CUSTOM_URL_CFG}"`);
+      log(`Custom Keybox URL сохранён: ${url || '(пусто)'}`);
+      toast('URL провайдера сохранён');
     });
 
     document.getElementById('chkKeepKeybox').addEventListener('change', e => toggleFlag(KEEP_KB_FLAG, e.target.checked, 'keep_keybox'));
@@ -603,23 +750,25 @@
 
     // Basic mode actions
     document.getElementById('btnBasicFix').addEventListener('click', () => {
-      const cmd =
-        `[ -f "${OMK_INJ}" ] && sed -i 's/^enabled = false/enabled = true/' "${OMK_INJ}" && chown 1017:1017 "${OMK_INJ}" && chmod 0600 "${OMK_INJ}" || true; ` +
-        `sh "${OMK_SYNC_ACT}" --basic`;
-      runAction('Basic Full Sync', 'Обновляем Canary (tangorpro), качаем Yurikey и синхронизируем OMK...', cmd, true, true);
+      const cmd = `sh "${OMK_SYNC_ACT}" --basic`;
+      runAction(
+        'Basic Full Sync',
+        'Обновляем Canary (tangorpro), ищем живой keybox по провайдерам и синхронизируем OMK...',
+        cmd,
+        { reloadAfter: true, checkCrl: true, autoFallbackOnRevoked: true, showOverlay: true }
+      );
     });
 
-    document.getElementById('btnBasicCheckCrl').addEventListener('click', () => {
-      withLoading('Проверка Keybox в Google CRL', 'Сверяем серийный номер сертификата...', () => checkKeyboxCrl(false));
-    });
+    document.getElementById('btnBasicCheckCrl').addEventListener('click', runCrlCheckWithOverlay);
 
     document.getElementById('btnBasicFallback').addEventListener('click', () => {
-      const cmd =
-        `[ -f "${OMK_INJ}" ] && sed -i 's/^enabled = true/enabled = false/' "${OMK_INJ}" && chown 1017:1017 "${OMK_INJ}" && chmod 0600 "${OMK_INJ}" || true; ` +
-        `. "${SUITE_DIR}/common.sh"; force_tangorpro_canary; ` +
-        `sed -i 's/^spoofBuild=.*/spoofBuild=1/; s/^spoofProps=.*/spoofProps=1/; s/^spoofProvider=.*/spoofProvider=1/; s/^spoofVendingFinger=.*/spoofVendingFinger=1/' "${PIF_PROP}"; ` +
-        `reload_omk; cleanup_google; echo "Fallback BASIC mode enabled (OMK injector off, spoofProvider=1)"`;
-      runAction('Переключение в режим BASIC', 'Отключаем отозванный keybox и включаем программный фолбэк...', cmd, true, false);
+      const cmd = `. "${SUITE_DIR}/common.sh" && enable_basic_fallback`;
+      runAction(
+        'Переключение в режим BASIC',
+        'Отключаем keybox (injector=off) и включаем программный фолбэк (spoofProvider=1)...',
+        cmd,
+        { reloadAfter: true }
+      );
     });
 
     document.getElementById('btnToggleKeyboxBox').addEventListener('click', () => {
@@ -640,33 +789,50 @@
         `printf '%s' '${b64}' | base64 -d > "${OMK_KEYBOX}.tmp" && ` +
         `mv -f "${OMK_KEYBOX}.tmp" "${OMK_KEYBOX}" && ` +
         `chown 1017:1017 "${OMK_KEYBOX}" && chmod 0600 "${OMK_KEYBOX}" && ` +
-        `[ -f "${OMK_INJ}" ] && sed -i 's/^enabled = false/enabled = true/' "${OMK_INJ}" && chown 1017:1017 "${OMK_INJ}" && chmod 0600 "${OMK_INJ}" || true && ` +
-        `. "${SUITE_DIR}/common.sh" && force_tangorpro_canary && force_basic_settings && sync_omk_config && reload_omk && cleanup_google`;
-      runAction('Установка своего keybox.xml', 'Сохраняем keybox, включаем keep_keybox и перезапускаем OMK...', cmd, true, true);
+        `. "${SUITE_DIR}/common.sh" && set_omk_injector_enabled true && force_tangorpro_canary && force_basic_settings && sync_omk_config && reload_omk && cleanup_google && reset_finsky_integrity_cache`;
+      runAction(
+        'Установка своего keybox.xml',
+        'Сохраняем keybox, включаем keep_keybox и перезапускаем OMK...',
+        cmd,
+        { reloadAfter: true, checkCrl: true, autoFallbackOnRevoked: false, showOverlay: true }
+      );
     });
 
     // PRO mode actions
     document.getElementById('btnOmkSync').addEventListener('click', () => {
-      runAction('Full Sync (action.sh)', 'Запуск autopif4, keybox и синхронизации OMK...', `sh "${OMK_SYNC_ACT}"`, true, true);
+      runAction(
+        'Full Sync (action.sh)',
+        'Запуск autopif4, каскада keybox и синхронизации OMK...',
+        `sh "${OMK_SYNC_ACT}"`,
+        { reloadAfter: true, checkCrl: true, autoFallbackOnRevoked: true, showOverlay: true }
+      );
     });
     document.getElementById('btnSyncLocal').addEventListener('click', () => {
-      runAction('Синхронизация PIF → OMK', 'Обновление OMK config.toml и перезапуск...', `. "${SUITE_DIR}/common.sh" && sync_omk_config && reload_omk && cleanup_google`, true, false);
+      runAction(
+        'Синхронизация PIF → OMK',
+        'Обновление OMK config.toml и перезапуск...',
+        `. "${SUITE_DIR}/common.sh" && sync_omk_config && reload_omk && cleanup_google`,
+        { reloadAfter: true }
+      );
     });
     document.getElementById('btnAutopif').addEventListener('click', () => {
-      runAction('autopif4.sh -m', 'Загрузка свежего Pixel Canary профиля...', `sh "${PIF_DIR}/autopif4.sh" -m`, true, false);
+      runAction('autopif4.sh -m', 'Загрузка свежего Pixel Canary профиля...', `sh "${PIF_DIR}/autopif4.sh" -m`, { reloadAfter: true });
     });
     document.getElementById('btnKillPi').addEventListener('click', () => {
-      runAction('Kill GMS / Vending', 'Перезапуск процессов Play Integrity...', `sh "${PIF_DIR}/killpi.sh"`, false, false);
+      runAction('Kill GMS / Vending', 'Перезапуск процессов Play Integrity...', `sh "${PIF_DIR}/killpi.sh"`);
     });
-    document.getElementById('btnCheckCrlPro').addEventListener('click', () => {
-      withLoading('Проверка Keybox в Google CRL', 'Сверяем серийный номер сертификата...', () => checkKeyboxCrl(false));
-    });
+    document.getElementById('btnCheckCrlPro').addEventListener('click', runCrlCheckWithOverlay);
     document.getElementById('btnReadSyncLog').addEventListener('click', async () => {
       const res = await execRoot(`cat "${SYNC_LOG}" 2>/dev/null || echo "Лог пуст"`);
       log('--- omk_pif_sync.log ---\n' + res.stdout.trim());
     });
     document.getElementById('btnRestoreBak').addEventListener('click', () => {
-      runAction('Восстановление .bak', 'Откат custom.pif.prop.bak...', `if [ -f "${PIF_BAK}" ]; then cp -f "${PIF_BAK}" "${PIF_PROP}" && chmod 0644 "${PIF_PROP}" && sh "${PIF_DIR}/killpi.sh"; else echo ".bak не найден"; fi`, true, false);
+      runAction(
+        'Восстановление .bak',
+        'Откат custom.pif.prop.bak...',
+        `if [ -f "${PIF_BAK}" ]; then cp -f "${PIF_BAK}" "${PIF_PROP}" && chmod 0644 "${PIF_PROP}" && sh "${PIF_DIR}/killpi.sh"; else echo ".bak не найден"; fi`,
+        { reloadAfter: true }
+      );
     });
     document.getElementById('btnClearLog').addEventListener('click', () => {
       document.getElementById('consoleLog').textContent = '';

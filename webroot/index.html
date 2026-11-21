@@ -13,6 +13,27 @@
     <p class="loading-sub" id="loadingSub">Пожалуйста, подождите</p>
   </div>
 
+  <!-- Full-screen SweetAlert2-style Neon Result Overlay -->
+  <div id="resultOverlay" class="result-overlay hidden" role="alertdialog" aria-live="assertive">
+    <div id="resultIconSuccess" class="sa-icon sa-success hidden">
+      <div class="sa-success-ring"></div>
+      <span class="sa-line sa-tip"></span>
+      <span class="sa-line sa-long"></span>
+    </div>
+    <div id="resultIconError" class="sa-icon sa-error hidden">
+      <span class="sa-x-mark">
+        <span class="sa-x-line sa-x-left"></span>
+        <span class="sa-x-line sa-x-right"></span>
+      </span>
+    </div>
+    <h2 class="result-title" id="resultTitle">Готово</h2>
+    <p class="result-sub" id="resultSub"></p>
+    <span class="result-hint">Нажмите в любое место, чтобы закрыть</span>
+    <div class="result-timer-track">
+      <div id="resultTimerFill" class="result-timer-fill"></div>
+    </div>
+  </div>
+
   <div class="container">
     <header class="header">
       <div>
@@ -45,7 +66,7 @@
       <p>
         Скачивает свежий Canary-профиль, принудительно выставляет <strong>Pixel Tablet (tangorpro)</strong>,
         включает <code>spoofBuild</code>, <code>spoofProps</code>, <code>spoofVendingFinger</code>,
-        скачивает keybox Yurikey, синхронизирует Oh My KeyMint и перезапускает сервисы Google.
+        ищет живой keybox по всем провайдерам (<strong>Specter/TAKR</strong>, <strong>MeowDump</strong>, <strong>Yurikey</strong>) с проверкой Google CRL — и автоматически включает режим <strong>BASIC</strong>, если все keybox отозваны.
       </p>
       <button class="btn btn-primary btn-hero" id="btnBasicFix">
         Исправить Play Integrity (Full Sync)
@@ -82,10 +103,33 @@
           <button class="btn btn-chip" data-preset="all_off">Выключить всё (0)</button>
         </div>
         <div class="switches-list" style="margin-top: 10px;">
+          <div class="field-row">
+            <label for="selProvider">
+              <strong>Провайдер Keybox</strong>
+              <span class="hint"><code>auto</code> проверяет Specter (TAKR/Catalog), MeowDump и Yurikey по Google CRL до первого живого</span>
+            </label>
+            <select id="selProvider" class="input select-sm">
+              <option value="auto">Auto (все провайдеры)</option>
+              <option value="specter">Specter (TAKR / Catalog)</option>
+              <option value="meowdump">MeowDump (Megatron)</option>
+              <option value="yurikey">Yurikey</option>
+              <option value="custom">Custom URL</option>
+            </select>
+          </div>
+          <div id="customProviderUrlRow" class="field-row hidden">
+            <label for="customProviderUrl">
+              <strong>Custom Keybox URL</strong>
+              <span class="hint">Прямой XML или Base64 URL (<code>/data/adb/omk_pif_sync_keybox_url</code>)</span>
+            </label>
+            <div style="display:flex; gap:6px; width:100%; max-width:360px;">
+              <input type="text" id="customProviderUrl" class="input" placeholder="https://..." />
+              <button class="btn btn-secondary" id="btnSaveProviderUrl">OK</button>
+            </div>
+          </div>
           <div class="switch-item">
             <div class="switch-info">
               <strong>Сохранять свой keybox (keep_keybox)</strong>
-              <span class="hint">Флаг <code>/data/adb/omk_pif_sync_keep_keybox</code>: не скачивать с Yurikey при автосинхронизации</span>
+              <span class="hint">Флаг <code>/data/adb/omk_pif_sync_keep_keybox</code>: не обновлять keybox при автосинхронизации</span>
             </div>
             <label class="toggle">
               <input type="checkbox" id="chkKeepKeybox" />
