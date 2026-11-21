@@ -1,6 +1,6 @@
 # OMK PIF Suite
 
-![Version](https://img.shields.io/badge/version-v1.3.0-4f8cff?style=flat-square)
+![Version](https://img.shields.io/badge/version-v1.3.1-4f8cff?style=flat-square)
 ![Platform](https://img.shields.io/badge/Android-13%2B-3ddc84?style=flat-square)
 ![Root](https://img.shields.io/badge/KernelSU%20%7C%20Magisk%20%7C%20APatch-compatible-blue?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square)

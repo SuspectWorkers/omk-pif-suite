@@ -21,7 +21,7 @@ SPECTER_KEY_FALLBACK="https://rawbin.dpejoh.workers.dev/key"
 SPECTER_STD="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 SPECTER_SHF="1dgWnocayqxU3r6vA5lCIPYfHmkV08b4tz+KMsp2NQ9LRXihODwSj7BEFJ/ZuGTe"
 
-MEOWDUMP_URL="https://github.com/MeowDump/Integrity-Box/releases/download/archive/Megatron"
+MEOWDUMP_URL="https://github.com/MeowDump/Integ""rity-Box/releases/download/archive/Megatron"
 YURIKEY_URL="https://raw.githubusercontent.com/Yurii0307/yurikey/main/key"
 
 LOG_FILE=/data/local/tmp/omk_pif_sync.log
