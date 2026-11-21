@@ -1,21 +1,21 @@
 # OMK PIF Suite
 
-![Version](https://img.shields.io/badge/version-v1.1.0-4f8cff?style=flat-square)
+![Version](https://img.shields.io/badge/version-v1.2.0-4f8cff?style=flat-square)
 ![Platform](https://img.shields.io/badge/Android-13%2B-3ddc84?style=flat-square)
 ![Root](https://img.shields.io/badge/KernelSU%20%7C%20Magisk%20%7C%20APatch-compatible-blue?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square)
 
-All-in-one **KernelSU / Magisk / APatch** module with an integrated **WebUI** for managing **PlayIntegrityFork** (`custom.pif.prop`) and syncing device/attestation metadata into **Oh My KeyMint (OMK)** to achieve **`MEETS_STRONG_INTEGRITY`** on Android 13+.
+All-in-one **KernelSU / Magisk / APatch** module with a mobile-responsive **WebUI** (**Basic** and **PRO** modes) for managing **PlayIntegrityFork** (`custom.pif.prop`) and syncing device/attestation metadata into **Oh My KeyMint (OMK)** on Android 13+.
 
 ---
 
 ## Features
 
-- **Integrated KernelSU WebUI** (`ksu://webui?id=omk_pif_suite`):
-  - Visual editor for **Build Fields**, **System Properties** (with per-key `#` comment toggles), **Advanced Settings** (`spoofBuild`, `spoofProps`, `spoofProvider`, `spoofSignature`, `spoofVendingFinger`, `spoofVendingSdk`, `verboseLogs`), and **Raw** `custom.pif.prop` editing.
-  - Verified one-tap Pixel Canary presets: **`Pixel Tablet (tangorpro)`** (SDK 33), **`Pixel Fold (felix)`** (SDK 33), **`Pixel 6a (bluejay)`** (SDK 32), plus `OMK A13+` / `Legacy (<A13)` / `Off`.
-  - Toggles for keybox protection (`/data/adb/omk_pif_sync_keep_keybox`) and disabling automatic `tangorpro` pinning (`/data/adb/omk_pif_sync_no_tangorpro`).
-  - One-click actions: full `action.sh` sync, local `PIF -> OMK` sync, `autopif4.sh -m`, `killpi.sh`, `.bak` restore, and live log viewer (`/data/local/tmp/omk_pif_sync.log`).
+- **Two WebUI Modes (`Basic` & `PRO`):**
+  - **Basic Mode (default):** one large centered **"Full Sync"** button that automatically runs `autopif4.sh -m`, pins `Pixel Tablet (tangorpro)`, enables `spoofBuild=1` / `spoofProps=1` / `spoofVendingFinger=1`, fetches the Yurikey keybox, syncs all fields into Oh My KeyMint, restarts GMS/Play Store, and checks the keybox against Google's live CRL (`android.googleapis.com/attestation/status`). Also includes 1-tap **CRL check**, **BASIC software fallback** (when public keyboxes are revoked), and custom `keybox.xml` paste.
+  - **PRO Mode:** full visual editor for **Build Fields**, **System Properties** (with `#` comment toggles), **Advanced Settings**, **Raw** `custom.pif.prop`, verified presets (`tangorpro`, `felix`, `bluejay`), and `keep_keybox` / `no_tangorpro` flags.
+- **Responsive Mobile Layout & Blocking Loading Overlay:**
+  - Safe overflow handling on narrow phone screens and a full-screen blocking YouTube-style spinner overlay during sync/save operations.
 - **Automated Boot & Action Sync (`service.sh` / `action.sh`):**
   - Runs `PlayIntegrityFork` `autopif4.sh -m` once online (or on Action trigger).
   - Pins the fetched Canary build (`ID`, `INCREMENTAL`, `SECURITY_PATCH`) to **`tangorpro_beta` (`Pixel Tablet`, `DEVICE_INITIAL_SDK_INT=33`, `spoofVendingFinger=1`)** unless opted out.

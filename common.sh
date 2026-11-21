@@ -31,14 +31,28 @@ download_url() {
 }
 
 cleanup_google() {
-  log_msg "Stopping and trimming caches for Google processes..."
-  for pkg in com.android.vending com.google.android.gms com.google.android.gsf; do
-    am force-stop "$pkg" >/dev/null 2>&1 || true
-    cmd package trim-caches 0 "$pkg" >/dev/null 2>&1 || true
-  done
+  log_msg "Stopping Play Store and DroidGuard processes..."
+  am force-stop com.android.vending >/dev/null 2>&1 || true
   killall com.google.android.gms.unstable >/dev/null 2>&1 || true
   killall com.android.vending >/dev/null 2>&1 || true
-  log_msg "Google processes stopped and caches trimmed"
+  log_msg "Google Play Integrity processes stopped"
+}
+
+force_basic_settings() {
+  PIF_PROP="$PIF_DIR/custom.pif.prop"
+  [ -f "$PIF_PROP" ] || return 0
+  tmp="${PIF_PROP}.tmp.$$"
+  awk '
+    /^spoofBuild=/ { print "spoofBuild=1"; next }
+    /^spoofProps=/ { print "spoofProps=1"; next }
+    /^spoofProvider=/ { print "spoofProvider=0"; next }
+    /^spoofSignature=/ { print "spoofSignature=0"; next }
+    /^spoofVendingFinger=/ { print "spoofVendingFinger=1"; next }
+    /^spoofVendingSdk=/ { print "spoofVendingSdk=0"; next }
+    { print }
+  ' "$PIF_PROP" > "$tmp" && mv "$tmp" "$PIF_PROP"
+  chmod 0644 "$PIF_PROP"
+  log_msg "Applied Basic settings (spoofBuild=1, spoofProps=1, spoofVendingFinger=1)"
 }
 
 force_tangorpro_canary() {
@@ -97,7 +111,7 @@ run_pif() {
 }
 
 update_keybox() {
-  if [ -f /data/adb/omk_pif_sync_keep_keybox ]; then
+  if [ "${FORCE_KEYBOX:-0}" != "1" ] && [ -f /data/adb/omk_pif_sync_keep_keybox ]; then
     log_msg "Keeping local keybox (/data/adb/omk_pif_sync_keep_keybox present)"
     return 0
   fi
@@ -277,8 +291,17 @@ configure_zygisk_hide() {
 
 reload_omk() {
   if [ -d "$OMK_STATE" ]; then
+    rm -f "$OMK_DIR/rpc.sock" 2>/dev/null || true
     : > "$OMK_STATE/restart.all"
     log_msg "Triggered Oh My KeyMint restart ($OMK_STATE/restart.all)"
-    sleep 3
+    i=0
+    while [ "$i" -lt 12 ]; do
+      if [ -S "$OMK_DIR/rpc.sock" ] && [ -f "$OMK_STATE/injector-daemon.pid" ]; then
+        break
+      fi
+      sleep 1
+      i=$((i + 1))
+    done
+    sleep 1
   fi
 }

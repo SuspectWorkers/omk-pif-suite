@@ -7,6 +7,12 @@
   <link rel="stylesheet" href="./style.css" />
 </head>
 <body>
+  <div id="loadingOverlay" class="loading-overlay hidden" role="status" aria-live="polite">
+    <div class="yt-spinner"></div>
+    <p class="loading-title" id="loadingTitle">Выполняется...</p>
+    <p class="loading-sub" id="loadingSub">Пожалуйста, подождите</p>
+  </div>
+
   <div class="container">
     <header class="header">
       <div>
@@ -14,137 +20,169 @@
         <p class="subtitle" id="filePath">/data/adb/modules/playintegrityfix/custom.pif.prop</p>
       </div>
       <div class="header-actions">
-        <button class="btn btn-secondary" id="btnReload" title="Перечитать файл">Обновить</button>
-        <button class="btn btn-primary" id="btnSave">Сохранить</button>
+        <div class="mode-switch" role="tablist" aria-label="Режим интерфейса">
+          <button class="mode-btn active" id="modeBasicBtn" data-mode="basic">Basic</button>
+          <button class="mode-btn" id="modeProBtn" data-mode="pro">PRO</button>
+        </div>
+        <button class="btn btn-secondary" id="btnReload" title="Перечитать статус">Обновить</button>
+        <button class="btn btn-primary hidden" id="btnSave">Сохранить</button>
       </div>
     </header>
 
     <section class="card status-card">
       <div class="status-grid" id="statusGrid">
-        <div class="stat"><span class="stat-k">PIF модуль</span><span class="stat-v" id="stPif">...</span></div>
+        <div class="stat"><span class="stat-k">PIF / Профиль</span><span class="stat-v" id="stPif">...</span></div>
         <div class="stat"><span class="stat-k">OhMyKeymint</span><span class="stat-v" id="stOmk">...</span></div>
-        <div class="stat"><span class="stat-k">Keybox / Пин</span><span class="stat-v" id="stKeybox">...</span></div>
-        <div class="stat"><span class="stat-k">ROM Patch / First API</span><span class="stat-v" id="stRomPatch">...</span></div>
+        <div class="stat"><span class="stat-k">Keybox (CRL)</span><span class="stat-v" id="stKeybox">...</span></div>
+        <div class="stat"><span class="stat-k">ROM Patch / API</span><span class="stat-v" id="stRomPatch">...</span></div>
       </div>
       <div class="expiry-note" id="metaNote">Загрузка...</div>
     </section>
 
-    <section class="card">
-      <div class="card-title-row">
-        <h2>Пресеты и синхронизация</h2>
-        <label class="inline-check">
-          <input type="checkbox" id="chkKillOnSave" checked />
-          <span>Перезапускать GMS/Play Store при сохранении</span>
-        </label>
+    <!-- BASIC MODE -->
+    <section id="basicPanel" class="card basic-hero">
+      <h2>Автоматическая настройка Play Integrity</h2>
+      <p>
+        Скачивает свежий Canary-профиль, принудительно выставляет <strong>Pixel Tablet (tangorpro)</strong>,
+        включает <code>spoofBuild</code>, <code>spoofProps</code>, <code>spoofVendingFinger</code>,
+        скачивает keybox Yurikey, синхронизирует Oh My KeyMint и перезапускает сервисы Google.
+      </p>
+      <button class="btn btn-primary btn-hero" id="btnBasicFix">
+        Исправить Play Integrity (Full Sync)
+      </button>
+      <div class="basic-subactions">
+        <button class="btn btn-chip" id="btnBasicCheckCrl">Проверить Keybox (CRL)</button>
+        <button class="btn btn-chip" id="btnBasicFallback">Режим только BASIC (без keybox)</button>
+        <button class="btn btn-chip" id="btnToggleKeyboxBox">Вставить свой keybox.xml</button>
       </div>
-      <div class="presets">
-        <button class="btn btn-chip" data-preset="tangorpro">Pixel Tablet (tangorpro)</button>
-        <button class="btn btn-chip" data-preset="felix">Pixel Fold (felix)</button>
-        <button class="btn btn-chip" data-preset="bluejay">Pixel 6a (bluejay)</button>
-        <button class="btn btn-chip" data-preset="omk_a13">OMK A13+</button>
-        <button class="btn btn-chip" data-preset="pif_legacy">Legacy (&lt;A13)</button>
-        <button class="btn btn-chip" data-preset="all_off">Выключить всё (0)</button>
-      </div>
-      <div class="switches-list" style="margin-top: 10px;">
-        <div class="switch-item">
-          <div class="switch-info">
-            <strong>Сохранять свой keybox (не перезаписывать)</strong>
-            <span class="hint">Создаёт <code>/data/adb/omk_pif_sync_keep_keybox</code> — OMK PIF Suite не скачивает keybox с Yurikey</span>
-          </div>
-          <label class="toggle">
-            <input type="checkbox" id="chkKeepKeybox" />
-            <span class="slider"></span>
-          </label>
-        </div>
-        <div class="switch-item">
-          <div class="switch-info">
-            <strong>Не пинить принудительно tangorpro при autopif4</strong>
-            <span class="hint">Создаёт <code>/data/adb/omk_pif_sync_no_tangorpro</code> — оставляет случайный профиль от autopif4</span>
-          </div>
-          <label class="toggle">
-            <input type="checkbox" id="chkNoTangorpro" />
-            <span class="slider"></span>
-          </label>
-        </div>
-      </div>
-      <div class="actions-row">
-        <button class="btn btn-accent" id="btnOmkSync">Полный Sync (action.sh)</button>
-        <button class="btn btn-accent" id="btnSyncLocal">Синхр. PIF → OMK</button>
-        <button class="btn btn-secondary" id="btnAutopif">autopif4 (-m)</button>
-        <button class="btn btn-warn" id="btnKillPi">Kill GMS / Vending</button>
-        <button class="btn btn-secondary" id="btnReadSyncLog">Лог Sync</button>
-        <button class="btn btn-secondary" id="btnRestoreBak">Восстановить .bak</button>
-      </div>
-    </section>
-
-    <nav class="tabs">
-      <button class="tab active" data-tab="switches">Переключатели</button>
-      <button class="tab" data-tab="fields">Build Fields</button>
-      <button class="tab" data-tab="props">System Props</button>
-      <button class="tab" data-tab="raw">Raw текст</button>
-    </nav>
-
-    <section class="tab-panel active" id="tab-switches">
-      <div class="card">
-        <h2>Advanced Settings</h2>
-        <div class="switches-list" id="switchesList"></div>
-        <div class="field-row" style="margin-top: 14px;">
-          <label for="verboseLogs">
-            <strong>verboseLogs</strong>
-            <span class="hint">Уровень логирования PIF/Native и PIF/Java в logcat</span>
-          </label>
-          <select id="verboseLogs" class="input select-sm">
-            <option value="0">0 (выкл)</option>
-            <option value="1">1</option>
-            <option value="2">2</option>
-            <option value="3">3</option>
-            <option value="100">100 (макс. отладка)</option>
-          </select>
+      <div id="customKeyboxBox" class="hidden" style="width:100%; text-align:left; margin-top:8px;">
+        <textarea id="keyboxXmlInput" class="raw-textarea" style="min-height:140px;" placeholder="Вставьте содержимое <AndroidAttestation>...</AndroidAttestation> сюда"></textarea>
+        <div class="actions-row">
+          <button class="btn btn-accent" id="btnSaveCustomKeybox">Сохранить свой keybox.xml + Sync</button>
         </div>
       </div>
     </section>
 
-    <section class="tab-panel" id="tab-fields">
-      <div class="card">
+    <!-- PRO MODE -->
+    <div id="proPanel" class="hidden">
+      <section class="card">
         <div class="card-title-row">
-          <h2>Build Fields</h2>
-          <button class="btn btn-chip" id="btnSyncSysProps">Скопировать в System Props</button>
+          <h2>Пресеты и синхронизация</h2>
+          <label class="inline-check">
+            <input type="checkbox" id="chkKillOnSave" checked />
+            <span>Перезапускать GMS/Play при сохранении</span>
+          </label>
         </div>
-        <div class="fields-grid" id="buildFieldsGrid"></div>
-      </div>
-    </section>
-
-    <section class="tab-panel" id="tab-props">
-      <div class="card">
-        <h2>System Properties</h2>
-        <p class="hint" style="margin-bottom: 12px;">
-          Если включён чекбокс «#», строка в <code>custom.pif.prop</code> будет закомментирована (не будет подменяться native-хуком).
-        </p>
-        <div class="fields-grid" id="sysPropsGrid"></div>
-        <div class="add-prop-row">
-          <input type="text" id="newPropKey" class="input" placeholder="Новое свойство (напр. ro.vendor.build.security_patch)" />
-          <input type="text" id="newPropVal" class="input" placeholder="Значение" />
-          <button class="btn btn-secondary" id="btnAddProp">Добавить</button>
+        <div class="presets">
+          <button class="btn btn-chip" data-preset="tangorpro">Pixel Tablet (tangorpro)</button>
+          <button class="btn btn-chip" data-preset="felix">Pixel Fold (felix)</button>
+          <button class="btn btn-chip" data-preset="bluejay">Pixel 6a (bluejay)</button>
+          <button class="btn btn-chip" data-preset="omk_a13">OMK A13+</button>
+          <button class="btn btn-chip" data-preset="pif_legacy">Legacy (&lt;A13)</button>
+          <button class="btn btn-chip" data-preset="all_off">Выключить всё (0)</button>
         </div>
-      </div>
-    </section>
-
-    <section class="tab-panel" id="tab-raw">
-      <div class="card">
-        <div class="card-title-row">
-          <h2>Raw custom.pif.prop</h2>
-          <div class="actions-inline">
-            <button class="btn btn-secondary" id="btnApplyRaw">Применить в форму</button>
-            <button class="btn btn-primary" id="btnSaveRaw">Сохранить Raw</button>
+        <div class="switches-list" style="margin-top: 10px;">
+          <div class="switch-item">
+            <div class="switch-info">
+              <strong>Сохранять свой keybox (keep_keybox)</strong>
+              <span class="hint">Флаг <code>/data/adb/omk_pif_sync_keep_keybox</code>: не скачивать с Yurikey при автосинхронизации</span>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="chkKeepKeybox" />
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="switch-item">
+            <div class="switch-info">
+              <strong>Не пинить tangorpro (no_tangorpro)</strong>
+              <span class="hint">Флаг <code>/data/adb/omk_pif_sync_no_tangorpro</code>: оставлять случайный профиль от autopif4</span>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="chkNoTangorpro" />
+              <span class="slider"></span>
+            </label>
           </div>
         </div>
-        <textarea id="rawEditor" class="raw-textarea" spellcheck="false"></textarea>
-      </div>
-    </section>
+        <div class="actions-row">
+          <button class="btn btn-accent" id="btnOmkSync">Full Sync (action.sh)</button>
+          <button class="btn btn-accent" id="btnSyncLocal">Синхр. PIF → OMK</button>
+          <button class="btn btn-secondary" id="btnAutopif">autopif4 (-m)</button>
+          <button class="btn btn-warn" id="btnKillPi">Kill GMS / Vending</button>
+          <button class="btn btn-secondary" id="btnCheckCrlPro">Проверить Keybox</button>
+          <button class="btn btn-secondary" id="btnReadSyncLog">Лог Sync</button>
+          <button class="btn btn-secondary" id="btnRestoreBak">Восстановить .bak</button>
+        </div>
+      </section>
+
+      <nav class="tabs">
+        <button class="tab active" data-tab="switches">Переключатели</button>
+        <button class="tab" data-tab="fields">Build Fields</button>
+        <button class="tab" data-tab="props">System Props</button>
+        <button class="tab" data-tab="raw">Raw текст</button>
+      </nav>
+
+      <section class="tab-panel active" id="tab-switches">
+        <div class="card">
+          <h2>Advanced Settings</h2>
+          <div class="switches-list" id="switchesList"></div>
+          <div class="field-row" style="margin-top: 14px;">
+            <label for="verboseLogs">
+              <strong>verboseLogs</strong>
+              <span class="hint">Уровень логирования PIF/Native и PIF/Java в logcat</span>
+            </label>
+            <select id="verboseLogs" class="input select-sm">
+              <option value="0">0 (выкл)</option>
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+              <option value="100">100 (макс. отладка)</option>
+            </select>
+          </div>
+        </div>
+      </section>
+
+      <section class="tab-panel" id="tab-fields">
+        <div class="card">
+          <div class="card-title-row">
+            <h2>Build Fields</h2>
+            <button class="btn btn-chip" id="btnSyncSysProps">Скопировать в System Props</button>
+          </div>
+          <div class="fields-grid" id="buildFieldsGrid"></div>
+        </div>
+      </section>
+
+      <section class="tab-panel" id="tab-props">
+        <div class="card">
+          <h2>System Properties</h2>
+          <p class="hint" style="margin-bottom: 12px;">
+            Чекбокс «#» комментирует строку в <code>custom.pif.prop</code> (отключает native-перехват).
+          </p>
+          <div class="fields-grid" id="sysPropsGrid"></div>
+          <div class="add-prop-row">
+            <input type="text" id="newPropKey" class="input" placeholder="Новое свойство (напр. ro.vendor.build.security_patch)" />
+            <input type="text" id="newPropVal" class="input" placeholder="Значение" />
+            <button class="btn btn-secondary" id="btnAddProp">Добавить</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="tab-panel" id="tab-raw">
+        <div class="card">
+          <div class="card-title-row">
+            <h2>Raw custom.pif.prop</h2>
+            <div class="actions-inline">
+              <button class="btn btn-secondary" id="btnApplyRaw">Применить в форму</button>
+              <button class="btn btn-primary" id="btnSaveRaw">Сохранить Raw</button>
+            </div>
+          </div>
+          <textarea id="rawEditor" class="raw-textarea" spellcheck="false"></textarea>
+        </div>
+      </section>
+    </div>
 
     <section class="card log-card">
       <div class="card-title-row">
-        <h2>Журнал выполнения</h2>
+        <h2>Журнал</h2>
         <button class="btn btn-chip" id="btnClearLog">Очистить</button>
       </div>
       <pre id="consoleLog" class="console"></pre>
