@@ -28,6 +28,7 @@
       </span>
     </div>
     <h2 class="result-title" id="resultTitle">Готово</h2>
+    <div id="resultChecksList" class="result-checks hidden"></div>
     <p class="result-sub" id="resultSub"></p>
     <span class="result-hint">Нажмите в любое место, чтобы закрыть</span>
     <div class="result-timer-track">
@@ -64,6 +65,11 @@
 
     <!-- AUTO MODE -->
     <section id="autoPanel" class="card auto-hero">
+      <div class="auto-badges-row" id="autoBadgesRow">
+        <span class="pi-chip" id="chipBasic">• Basic: —</span>
+        <span class="pi-chip" id="chipDevice">• Device: —</span>
+        <span class="pi-chip" id="chipStrong">• Strong: —</span>
+      </div>
       <div class="auto-state-pill">
         <span class="auto-dot" id="autoStateDot"></span>
         <span id="autoStateText">Готово к запуску AUTO</span>

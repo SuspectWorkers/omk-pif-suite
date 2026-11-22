@@ -15,6 +15,7 @@ PROBE_EP_CFG=/data/adb/omk_pif_sync_probe_endpoint
 PROBE_SEC_CFG=/data/adb/omk_pif_sync_probe_secret
 PROJECT_NUM_CFG=/data/adb/omk_pif_sync_project_number
 QUOTA_FILE=/data/adb/omk_probe_quota.dat
+LAST_STATUS_FILE=/data/adb/omk_last_status.dat
 STATE_DB=/data/adb/omk_pif_suite_state.db
 PROBE_PKG=com.omk.integrityprobe
 PROBE_APK_MOD=/data/adb/modules/omk_pif_suite/probe/OMKIntegrityProbe.apk
@@ -274,7 +275,14 @@ enable_basic_fallback() {
   reload_omk
   cleanup_google
   reset_finsky_integrity_cache
+  save_last_status 1 0 0 REVOKED
   trace_msg "Режим BASIC активирован (устройство пройдёт базовую проверку)"
+}
+
+save_last_status() {
+  mkdir -p /data/adb 2>/dev/null || true
+  printf '%s|%s|%s|%s|%s\n' "${1:-0}" "${2:-0}" "${3:-0}" "${4:-UNKNOWN}" "$(date +%s 2>/dev/null || echo 0)" > "$LAST_STATUS_FILE"
+  chmod 0644 "$LAST_STATUS_FILE" 2>/dev/null || true
 }
 
 get_profile_candidates() {
@@ -587,10 +595,43 @@ _run_probe_once() {
 
   dev_now=$(read_pif_val DEVICE "$PIF_DIR/custom.pif.prop" 2>/dev/null || echo "-")
   sdk_now=$(read_pif_val DEVICE_INITIAL_SDK_INT "$PIF_DIR/custom.pif.prop" 2>/dev/null || echo "-")
-  trace_msg "Результат для $dev_now (SDK $sdk_now): $verdict [${labels:-пусто}] (лимит: ${eff_used}/${eff_limit})"
+
+  inj_on=$(toml_get_in_section "$OMK_INJ" main enabled 2>/dev/null || echo "false")
+  kb_status="MISSING"
+  if [ -s "$OMK_KEYBOX" ]; then
+    if validate_keybox_file "$OMK_KEYBOX" >/dev/null 2>&1; then
+      kb_status="LIVE"
+    elif [ "$?" -eq 2 ]; then
+      kb_status="OFFLINE"
+    else
+      kb_status="REVOKED"
+    fi
+  fi
+
+  b_ok=0; d_ok=0; s_ok=0
+  if [ "$verdict" = "STRONG" ]; then
+    b_ok=1; d_ok=1; s_ok=1
+  elif [ "$verdict" = "DEVICE" ]; then
+    b_ok=1; d_ok=1
+    if [ "$inj_on" = "true" ] && [ "$kb_status" = "LIVE" ] && toml_verify_injector_safe "$OMK_INJ" >/dev/null 2>&1; then
+      s_ok=1
+    fi
+  elif [ "$verdict" = "BASIC" ]; then
+    b_ok=1
+  elif [ "$inj_on" = "false" ] && [ "$(read_pif_val spoofProvider "$PIF_DIR/custom.pif.prop" 2>/dev/null || echo 0)" = "1" ]; then
+    # In BASIC-only mode without keybox, Google Play Store still grants MEETS_BASIC_INTEGRITY
+    b_ok=1
+  fi
+  save_last_status "$b_ok" "$d_ok" "$s_ok" "$kb_status"
+
+  trace_msg "Результат для $dev_now (SDK $sdk_now): Basic=$b_ok Device=$d_ok Strong=$s_ok (лимит: ${eff_used}/${eff_limit})"
 
   echo "RESULT_MODE=HEADLESS"
   echo "RESULT_VERDICT=$verdict"
+  echo "RESULT_BASIC=$b_ok"
+  echo "RESULT_DEVICE=$d_ok"
+  echo "RESULT_STRONG=$s_ok"
+  echo "RESULT_KEYBOX=$kb_status"
   echo "RESULT_PROFILE=$dev_now (SDK $sdk_now)"
   echo "RESULT_LABELS=${labels:-пусто (app=$app_v)}"
   echo "RESULT_USED=$eff_used"

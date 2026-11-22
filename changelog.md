@@ -1,5 +1,11 @@
 # OMK PIF Suite Changelog
 
+## v1.8.2
+- Added `Basic` / `Device` / `Strong` status badges above the status pill on the `AUTO` screen with hierarchical checks.
+- Smart skip in `AUTO` mode: skips updating keybox and fingerprint when all three Play Integrity checks already pass; replaces banned keyboxes or rotates fingerprints until all three pass otherwise.
+- Added sequential green/red checkmark animations (`MEETS_BASIC_INTEGRITY`, `MEETS_DEVICE_INTEGRITY`, `MEETS_STRONG_INTEGRITY`) to the result overlay.
+- Updated bilingual `README.md` / `README.ru.md`.
+
 ## v1.8.1
 - Redesigned `AUTO` mode with a centered VPN-style animated power button reflecting live protection status (`ON` / `BASIC` / `AUTO`).
 - Rewrote project documentation (`README.md` + `README.ru.md`) with a clean English/Russian switcher.

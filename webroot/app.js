@@ -11,6 +11,7 @@
   const PROVIDER_CFG = '/data/adb/omk_pif_sync_provider';
   const CUSTOM_URL_CFG = '/data/adb/omk_pif_sync_keybox_url';
   const QUOTA_FILE = '/data/adb/omk_probe_quota.dat';
+  const LAST_STATUS_FILE = '/data/adb/omk_last_status.dat';
   const SYNC_LOG = '/data/local/tmp/omk_pif_sync.log';
   const LIVE_TRACE = '/data/local/tmp/omk_live_trace.log';
   const MODE_KEY = 'omk_pif_suite_mode';
@@ -81,12 +82,13 @@
     if (busyDepth === 0) document.body.classList.remove('modal-open');
   }
 
-  function showResultOverlay(isSuccess, title, subtitle = '', durationMs = 3000) {
+  function showResultOverlay(isSuccess, title, subtitle = '', durationMs = 4000, checks = null) {
     hideResultOverlay();
     const overlay = document.getElementById('resultOverlay');
     const iconOk = document.getElementById('resultIconSuccess');
     const iconErr = document.getElementById('resultIconError');
     const fill = document.getElementById('resultTimerFill');
+    const checksEl = document.getElementById('resultChecksList');
 
     overlay.classList.toggle('is-success', !!isSuccess);
     overlay.classList.toggle('is-error', !isSuccess);
@@ -101,6 +103,26 @@
 
     document.getElementById('resultTitle').textContent = title;
     document.getElementById('resultSub').textContent = subtitle;
+
+    if (checksEl) {
+      checksEl.innerHTML = '';
+      if (checks && typeof checks === 'object') {
+        const items = [
+          { label: 'MEETS_BASIC_INTEGRITY', ok: !!checks.basic },
+          { label: 'MEETS_DEVICE_INTEGRITY', ok: !!checks.device },
+          { label: 'MEETS_STRONG_INTEGRITY', ok: !!checks.strong }
+        ];
+        items.forEach(it => {
+          const row = document.createElement('div');
+          row.className = `result-check-row ${it.ok ? 'is-ok' : 'is-bad'}`;
+          row.innerHTML = `<span class="rc-badge">${it.ok ? '✓' : '✕'}</span><span>${it.label}</span>`;
+          checksEl.appendChild(row);
+        });
+        checksEl.classList.remove('hidden');
+      } else {
+        checksEl.classList.add('hidden');
+      }
+    }
 
     fill.classList.remove('running');
     fill.style.animationDuration = `${durationMs}ms`;
@@ -441,6 +463,21 @@
     }
   }
 
+  function setPiChip(id, name, stateMode) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.classList.remove('is-ok', 'is-bad');
+    if (stateMode === true) {
+      el.classList.add('is-ok');
+      el.textContent = `✓ ${name}: активно`;
+    } else if (stateMode === false) {
+      el.classList.add('is-bad');
+      el.textContent = `✕ ${name}: бан`;
+    } else {
+      el.textContent = `• ${name}: —`;
+    }
+  }
+
   async function loadStatus() {
     try {
       const res = await execRoot(
@@ -455,7 +492,9 @@
         `echo "PROV=$([ -f ${PROVIDER_CFG} ] && cat ${PROVIDER_CFG} 2>/dev/null | tr -d '\\r\\n')"\n` +
         `echo "CURL=$([ -f ${CUSTOM_URL_CFG} ] && cat ${CUSTOM_URL_CFG} 2>/dev/null | tr -d '\\r\\n')"\n` +
         `echo "QUOTA=$([ -f ${QUOTA_FILE} ] && cat ${QUOTA_FILE} 2>/dev/null | tr -d '\\r\\n')"\n` +
-        `echo "KB=$([ -s ${OMK_KEYBOX} ] && echo present || echo missing)"`
+        `echo "LSTAT=$([ -f ${LAST_STATUS_FILE} ] && cat ${LAST_STATUS_FILE} 2>/dev/null | tr -d '\\r\\n')"\n` +
+        `echo "KB=$([ -s ${OMK_KEYBOX} ] && echo present || echo missing)"\n` +
+        `echo "KBCRL=$(if [ -s ${OMK_KEYBOX} ] && [ -s /data/local/tmp/omk_crl_cache.json ]; then . "${SUITE_DIR}/common.sh"; krc=0; validate_keybox_file "${OMK_KEYBOX}" >/dev/null 2>&1 || krc=$?; if [ "$krc" -eq 0 ]; then echo live; elif [ "$krc" -eq 2 ]; then echo offline; else echo revoked; fi; else echo unknown; fi)"`
       );
       const map = {};
       res.stdout.split('\n').forEach(l => {
@@ -468,6 +507,37 @@
       const injState = map.INJ === 'false' ? 'off' : (map.INJ === 'true' ? 'on' : '?');
       omkEl.textContent = `${map.OMK || 'нет'} (${injState}${map.FILT === 'unsafe' ? ', unsafe!' : ''})`;
       omkEl.className = 'stat-v ' + (map.FILT === 'unsafe' ? 'badge-bad' : (map.INJ === 'false' ? 'badge-warn' : ''));
+
+      // Compute Basic / Device / Strong chips above status pill with strict hierarchy:
+      // Strong requires Device + live non-banned keybox + safe OMK; Device requires Basic + good fingerprint
+      let bOk = null; let dOk = null; let sOk = null;
+      if (map.LSTAT && map.LSTAT.includes('|')) {
+        const parts = map.LSTAT.split('|');
+        bOk = parts[0] === '1';
+        dOk = parts[1] === '1';
+        sOk = parts[2] === '1';
+      } else if (map.INJ === 'false') {
+        bOk = true; dOk = false; sOk = false;
+      }
+      if (map.KB !== 'present' || map.KBCRL === 'revoked' || map.INJ !== 'true' || map.FILT !== 'safe') {
+        sOk = false;
+      }
+      if (map.INJ === 'false') {
+        dOk = false; sOk = false;
+      }
+      if (bOk === false) {
+        dOk = false; sOk = false;
+      }
+      if (dOk === false) {
+        sOk = false;
+      }
+      if (map.KBCRL === 'live' && map.INJ === 'true' && map.FILT === 'safe' && dOk === true && bOk === true) {
+        sOk = true;
+      }
+      setPiChip('chipBasic', 'Basic', bOk);
+      setPiChip('chipDevice', 'Device', dOk);
+      setPiChip('chipStrong', 'Strong', sOk);
+
       const powerStage = document.getElementById('powerStage');
       const autoDot = document.getElementById('autoStateDot');
       const autoText = document.getElementById('autoStateText');
@@ -478,7 +548,7 @@
         if (map.INJ === 'true' && map.FILT === 'safe' && map.KB === 'present') {
           powerStage.classList.add('is-on');
           autoDot.classList.add('is-on');
-          autoText.textContent = `Активно • ${dev}`;
+          autoText.textContent = sOk ? `Активно (Strong) • ${dev}` : `Активно • ${dev}`;
           if (autoBtnLbl) autoBtnLbl.textContent = 'ON';
         } else if (map.INJ === 'false') {
           powerStage.classList.add('is-basic');
@@ -832,21 +902,25 @@
       await loadConfig();
       await loadStatus();
 
+      const bOk = map.RESULT_BASIC === '1' || passed;
+      const dOk = map.RESULT_DEVICE === '1' || passed;
+      const sOk = map.RESULT_STRONG === '1' || v === 'STRONG';
+      const checks = (v === 'ERROR' || v === 'QUOTA') ? null : { basic: bOk, device: dOk, strong: sOk };
+
       overlay = {
         valid: passed,
-        title: v === 'STRONG'
+        title: sOk
           ? 'MEETS_STRONG_INTEGRITY'
-          : (v === 'DEVICE'
-            ? 'MEETS_DEVICE_INTEGRITY'
-            : (v === 'QUOTA' ? 'Лимит проверок исчерпан' : `Play Integrity: ${v}`)),
-        subtitle: `Профиль: ${prof} • ${labels}`
+          : (dOk ? 'MEETS_DEVICE_INTEGRITY' : (v === 'QUOTA' ? 'Лимит проверок исчерпан' : `Play Integrity: ${v}`)),
+        subtitle: `Профиль: ${prof} • ${labels}`,
+        checks
       };
     } catch (e) {
       log('Ошибка проверки Play Integrity: ' + e.message);
-      overlay = { valid: false, title: 'Ошибка проверки', subtitle: e.message };
+      overlay = { valid: false, title: 'Ошибка проверки', subtitle: e.message, checks: null };
     }
     if (overlay) {
-      showResultOverlay(overlay.valid, overlay.title, overlay.subtitle, 3000);
+      showResultOverlay(overlay.valid, overlay.title, overlay.subtitle, 4000, overlay.checks);
     }
   }
 
@@ -874,35 +948,45 @@
       await loadConfig();
       await loadStatus();
 
+      const bOk = map.RESULT_BASIC === '1' || map.RESULT_VERDICT === 'STRONG' || map.RESULT_VERDICT === 'DEVICE';
+      const dOk = map.RESULT_DEVICE === '1' || map.RESULT_VERDICT === 'STRONG' || map.RESULT_VERDICT === 'DEVICE';
+      const sOk = map.RESULT_STRONG === '1' || map.RESULT_VERDICT === 'STRONG';
+      const checks = (map.RESULT_VERDICT && map.RESULT_VERDICT !== 'ERROR' && map.RESULT_VERDICT !== 'QUOTA') || map.RESULT_FALLBACK === 'BASIC'
+        ? { basic: bOk, device: dOk, strong: sOk }
+        : null;
+
       if (res.code !== 0) {
         const tail = out ? out.split('\n').slice(-2).join(' • ') : `Код ошибки: ${res.code}`;
-        overlay = { valid: false, title: 'Ошибка настройки', subtitle: tail };
+        overlay = { valid: false, title: 'Ошибка настройки', subtitle: tail, checks: null };
       } else if (map.RESULT_FALLBACK === 'BASIC') {
         overlay = {
           valid: false,
           title: 'Keybox отозваны → режим BASIC',
-          subtitle: `Включён безопасный режим без keybox (${map.RESULT_PROFILE || '-'})`
+          subtitle: `Включён безопасный режим без keybox (${map.RESULT_PROFILE || '-'})`,
+          checks: { basic: true, device: false, strong: false }
         };
-      } else if (map.RESULT_VERDICT === 'STRONG' || map.RESULT_VERDICT === 'DEVICE') {
+      } else if (sOk || dOk) {
         overlay = {
           valid: true,
-          title: map.RESULT_VERDICT === 'STRONG' ? 'MEETS_STRONG_INTEGRITY' : 'MEETS_DEVICE_INTEGRITY',
-          subtitle: `Профиль: ${map.RESULT_PROFILE || '-'} • Keybox LIVE (${map.RESULT_LABELS || 'OK'})`
+          title: sOk ? 'MEETS_STRONG_INTEGRITY' : 'MEETS_DEVICE_INTEGRITY',
+          subtitle: `Профиль: ${map.RESULT_PROFILE || '-'}${map.RESULT_SKIPPED_UPDATE === '1' ? ' • Уже активно' : ''}`,
+          checks
         };
       } else {
         const crl = await checkKeyboxCrl({ silent: false, autoFallbackOnRevoked: false });
         overlay = {
           valid: crl.valid && map.RESULT_VERDICT !== 'NONE',
           title: map.RESULT_VERDICT ? `Integrity: ${map.RESULT_VERDICT}` : crl.title,
-          subtitle: `${map.RESULT_PROFILE || ''} • ${crl.subtitle}`
+          subtitle: `${map.RESULT_PROFILE || ''} • ${crl.subtitle}`,
+          checks
         };
       }
     } catch (e) {
       log('Ошибка AUTO-настройки: ' + e.message);
-      overlay = { valid: false, title: 'Ошибка выполнения', subtitle: e.message };
+      overlay = { valid: false, title: 'Ошибка выполнения', subtitle: e.message, checks: null };
     }
     if (overlay) {
-      showResultOverlay(overlay.valid, overlay.title, overlay.subtitle, 3000);
+      showResultOverlay(overlay.valid, overlay.title, overlay.subtitle, 4000, overlay.checks);
     }
   }
 
