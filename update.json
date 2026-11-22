@@ -1,6 +1,6 @@
 {
-  "version": "v1.8.2",
-  "versionCode": 182,
-  "zipUrl": "https://github.com/SuspectWorkers/omk-pif-suite/releases/download/v1.8.2/omk_pif_suite.zip",
+  "version": "v1.8.3",
+  "versionCode": 183,
+  "zipUrl": "https://github.com/SuspectWorkers/omk-pif-suite/releases/download/v1.8.3/omk_pif_suite.zip",
   "changelog": "https://raw.githubusercontent.com/SuspectWorkers/omk-pif-suite/main/changelog.md"
 }

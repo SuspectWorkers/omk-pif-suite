@@ -3,10 +3,7 @@ MODDIR="${0%/*}"
 [ -f "$MODDIR/common.sh" ] && . "$MODDIR/common.sh"
 
 restore_toml_key() {
-  r_file=$1
-  r_sec=$2
-  r_key=$3
-  r_orig=$4
+  local r_file="$1" r_sec="$2" r_key="$3" r_orig="$4" dir base tmp
   [ -f "$r_file" ] || return 0
   dir=${r_file%/*}
   base=${r_file##*/}

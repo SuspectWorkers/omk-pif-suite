@@ -1,5 +1,11 @@
 # OMK PIF Suite Changelog
 
+## v1.8.3
+- Fixed critical `mksh` dynamic variable scoping bug in `common.sh` (`_write_injector_main_enabled` / `toml_verify_injector_safe`) that prevented `[main].enabled = true` from being written to `/data/misc/keystore/omk/injector.toml`.
+- Added atomic PID locking (`omk_action.lock.d`) in `action.sh` and single-flight/re-attach guards in WebUI (`app.js`) so two `action.sh` or verification runs cannot execute concurrently.
+- Added `check_required_modules()` and WebUI detection for disabled `Oh My KeyMint` / `PlayIntegrityFork` modules or stopped OMK RPC socket, plus automatic recovery of `[main].enabled = true` and `spoofProvider = 0`.
+- Fixed `_run_probe_once` so `Basic` reflects the actual Play Integrity response without false positives.
+
 ## v1.8.2
 - Added `Basic` / `Device` / `Strong` status badges above the status pill on the `AUTO` screen with hierarchical checks.
 - Smart skip in `AUTO` mode: skips updating keybox and fingerprint when all three Play Integrity checks already pass; replaces banned keyboxes or rotates fingerprints until all three pass otherwise.

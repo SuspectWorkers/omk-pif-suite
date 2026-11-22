@@ -49,7 +49,7 @@ log_msg() {
 }
 
 download_url() {
-  url=$1
+  local url="$1" bb
   if command -v curl >/dev/null 2>&1; then
     curl --connect-timeout 12 --max-time 30 -fsSL "$url"
     return $?
@@ -88,9 +88,7 @@ reset_finsky_integrity_cache() {
 }
 
 set_pif_prop() {
-  key=$1
-  val=$2
-  file="$PIF_DIR/custom.pif.prop"
+  local key="$1" val="$2" file="$PIF_DIR/custom.pif.prop" tmp
   [ -f "$file" ] || return 0
   tmp="${file}.tmp.$$"
   awk -v k="$key" -v v="$val" '
@@ -103,9 +101,9 @@ set_pif_prop() {
 }
 
 force_basic_settings() {
-  PIF_PROP="$PIF_DIR/custom.pif.prop"
-  [ -f "$PIF_PROP" ] || return 0
-  tmp="${PIF_PROP}.tmp.$$"
+  local pif_prop="$PIF_DIR/custom.pif.prop" tmp
+  [ -f "$pif_prop" ] || return 0
+  tmp="${pif_prop}.tmp.$$"
   awk '
     /^spoofBuild=/ { print "spoofBuild=1"; next }
     /^spoofProps=/ { print "spoofProps=1"; next }
@@ -114,15 +112,13 @@ force_basic_settings() {
     /^spoofVendingFinger=/ { print "spoofVendingFinger=1"; next }
     /^spoofVendingSdk=/ { print "spoofVendingSdk=0"; next }
     { print }
-  ' "$PIF_PROP" > "$tmp" && mv "$tmp" "$PIF_PROP"
-  chmod 0644 "$PIF_PROP"
+  ' "$pif_prop" > "$tmp" && mv "$tmp" "$pif_prop"
+  chmod 0644 "$pif_prop"
   log_msg "Applied Basic settings (spoofBuild=1, spoofProps=1, spoofVendingFinger=1)"
 }
 
 toml_get_in_section() {
-  file=$1
-  section=$2
-  key=$3
+  local file="$1" section="$2" key="$3"
   [ -f "$file" ] || return 1
   awk -v sec="[$section]" -v k="$key" '
     BEGIN { in_sec=(sec=="[]" ? 1 : 0); found=0 }
@@ -148,7 +144,7 @@ toml_get_in_section() {
 }
 
 toml_verify_injector_safe() {
-  inj_file=$1
+  local inj_file="$1" f_enabled f_block_android
   [ -f "$inj_file" ] && [ -r "$inj_file" ] || { log_msg "ERROR: $inj_file missing or unreadable"; return 1; }
   grep -q '^[[:space:]]*\[main\][[:space:]]*$' "$inj_file" 2>/dev/null || { log_msg "ERROR: $inj_file missing [main] section"; return 1; }
   grep -q '^[[:space:]]*\[filter\][[:space:]]*$' "$inj_file" 2>/dev/null || { log_msg "ERROR: $inj_file missing [filter] section"; return 1; }
@@ -163,9 +159,7 @@ toml_verify_injector_safe() {
 }
 
 atomic_replace_omk_file() {
-  target_file=$1
-  staging_file=$2
-  default_mode=${3:-0600}
+  local target_file="$1" staging_file="$2" default_mode="${3:-0600}" ug md
   [ -s "$staging_file" ] || { rm -f "$staging_file"; return 1; }
 
   if [ -e "$target_file" ]; then
@@ -183,7 +177,7 @@ atomic_replace_omk_file() {
 }
 
 record_omk_state() {
-  s_file=$1; s_sec=$2; s_key=$3; s_orig=$4; s_written=$5
+  local s_file="$1" s_sec="$2" s_key="$3" s_orig="$4" s_written="$5" tmp_db
   mkdir -p /data/adb 2>/dev/null || true
   touch "$STATE_DB" 2>/dev/null || return 0
   tmp_db="${STATE_DB}.tmp.$$"
@@ -197,8 +191,7 @@ record_omk_state() {
 }
 
 _write_injector_main_enabled() {
-  inj_file=$1
-  new_state=$2
+  local inj_file="$1" new_state="$2" dir base tmp actual_main
   dir=${inj_file%/*}
   base=${inj_file##*/}
   tmp="${dir}/.${base}.tmp.$$"
@@ -237,14 +230,33 @@ _write_injector_main_enabled() {
   atomic_replace_omk_file "$inj_file" "$tmp" 0600
 }
 
+check_required_modules() {
+  if [ ! -d "$PIF_DIR" ] || [ -f "$PIF_DIR/disable" ] || [ -f "$PIF_DIR/remove" ]; then
+    trace_msg "ОШИБКА: модуль PlayIntegrityFork не найден или отключён в менеджере root!"
+    return 1
+  fi
+  if [ ! -d "/data/adb/modules/oh_my_keymint" ] || [ -f "/data/adb/modules/oh_my_keymint/disable" ] || [ -f "/data/adb/modules/oh_my_keymint/remove" ]; then
+    trace_msg "ОШИБКА: модуль Oh My KeyMint не найден или отключён в менеджере root!"
+    return 1
+  fi
+  if [ ! -f "$OMK_INJ" ] || [ ! -f "$OMK_CFG" ]; then
+    trace_msg "ОШИБКА: не найдены конфиги Oh My KeyMint ($OMK_DIR) — перезагрузите устройство!"
+    return 1
+  fi
+  return 0
+}
+
 set_omk_injector_enabled() {
-  state=$1 # true or false
+  local state="$1" orig_val verify_val
   if [ ! -f "$OMK_INJ" ] || [ ! -r "$OMK_INJ" ]; then
     log_msg "ERROR: $OMK_INJ missing or unreadable"
     return 1
   fi
   grep -q '^[[:space:]]*\[main\][[:space:]]*$' "$OMK_INJ" 2>/dev/null || { log_msg "ERROR: $OMK_INJ unparseable (missing [main])"; return 1; }
   grep -q '^[[:space:]]*\[filter\][[:space:]]*$' "$OMK_INJ" 2>/dev/null || { log_msg "ERROR: $OMK_INJ unparseable (missing [filter])"; return 1; }
+
+  # Clean up any stale temp files left by older runs
+  rm -f "${OMK_DIR}/.injector.toml.tmp."* 2>/dev/null || true
 
   trace_msg "Проверяем защиту [filter] в injector.toml..."
   orig_val=$(toml_get_in_section "$OMK_INJ" main enabled 2>/dev/null || echo "<ABSENT>")
@@ -258,6 +270,11 @@ set_omk_injector_enabled() {
   fi
 
   _write_injector_main_enabled "$OMK_INJ" "$state" || return 1
+  verify_val=$(toml_get_in_section "$OMK_INJ" main enabled 2>/dev/null || echo "")
+  if [ "$verify_val" != "$state" ]; then
+    trace_msg "ОШИБКА: не удалось записать enabled=$state в $OMK_INJ (текущее='$verify_val')"
+    return 1
+  fi
   record_omk_state "$OMK_INJ" main enabled "$orig_val" "$state"
   return 0
 }
@@ -286,6 +303,7 @@ save_last_status() {
 }
 
 get_profile_candidates() {
+  local sdk
   sdk=$(getprop ro.build.version.sdk 2>/dev/null)
   [ -n "$sdk" ] || sdk=33
   if [ "$sdk" -ge 37 ]; then
@@ -325,7 +343,7 @@ EOF
 }
 
 fetch_canary_for_product() {
-  prod=$1
+  local prod="$1" flash_html station_json api_key url bb tac_block c_id c_inc
   flash_html="/data/local/tmp/omk_flash.$$"
   station_json="/data/local/tmp/omk_station.$$"
   if download_url "https://flash.android.com/" > "$flash_html" 2>/dev/null; then
@@ -359,26 +377,26 @@ fetch_canary_for_product() {
 }
 
 apply_pif_profile() {
-  dev=$1; prod=$2; model=$3; sdk_init=$4
-  PIF_PROP="$PIF_DIR/custom.pif.prop"
-  [ -f "$PIF_PROP" ] || return 1
+  local dev="$1" prod="$2" model="$3" sdk_init="$4" pif_prop rel bid inc typ tgs live_pair new_fp tmp
+  pif_prop="$PIF_DIR/custom.pif.prop"
+  [ -f "$pif_prop" ] || return 1
 
-  REL=$(read_pif_val RELEASE "$PIF_PROP"); [ -n "$REL" ] || REL=CANARY
-  BID=$(read_pif_val ID "$PIF_PROP")
-  INC=$(read_pif_val INCREMENTAL "$PIF_PROP")
-  TYP=$(read_pif_val TYPE "$PIF_PROP"); [ -n "$TYP" ] || TYP=user
-  TGS=$(read_pif_val TAGS "$PIF_PROP"); [ -n "$TGS" ] || TGS=release-keys
+  rel=$(read_pif_val RELEASE "$pif_prop"); [ -n "$rel" ] || rel=CANARY
+  bid=$(read_pif_val ID "$pif_prop")
+  inc=$(read_pif_val INCREMENTAL "$pif_prop")
+  typ=$(read_pif_val TYPE "$pif_prop"); [ -n "$typ" ] || typ=user
+  tgs=$(read_pif_val TAGS "$pif_prop"); [ -n "$tgs" ] || tgs=release-keys
 
   live_pair=$(fetch_canary_for_product "$prod" 2>/dev/null || true)
   if [ -n "$live_pair" ]; then
-    BID=${live_pair%%"|"*}
-    INC=${live_pair#*"|"}
+    bid=${live_pair%%"|"*}
+    inc=${live_pair#*"|"}
   fi
-  [ -n "$BID" ] && [ -n "$INC" ] || return 1
+  [ -n "$bid" ] && [ -n "$inc" ] || return 1
 
-  NEW_FP="google/${prod}/${dev}:${REL}/${BID}/${INC}:${TYP}/${TGS}"
-  tmp="${PIF_PROP}.tmp.$$"
-  awk -v mod="$model" -v d="$dev" -v p="$prod" -v fp="$NEW_FP" -v bid="$BID" -v inc="$INC" -v sdk="$sdk_init" '
+  new_fp="google/${prod}/${dev}:${rel}/${bid}/${inc}:${typ}/${tgs}"
+  tmp="${pif_prop}.tmp.$$"
+  awk -v mod="$model" -v d="$dev" -v p="$prod" -v fp="$new_fp" -v bid="$bid" -v inc="$inc" -v sdk="$sdk_init" '
     /^MODEL=/ { print "MODEL=" mod; next }
     /^DEVICE=/ { print "DEVICE=" d; next }
     /^PRODUCT=/ { print "PRODUCT=" p; next }
@@ -393,14 +411,14 @@ apply_pif_profile() {
     /^ro\.product\.first_api_level=/ { print "ro.product.first_api_level=" sdk; next }
     /^spoofVendingFinger=/ { print "spoofVendingFinger=1"; next }
     { print }
-  ' "$PIF_PROP" > "$tmp" && mv "$tmp" "$PIF_PROP"
-  chmod 0644 "$PIF_PROP"
+  ' "$pif_prop" > "$tmp" && mv "$tmp" "$pif_prop"
+  chmod 0644 "$pif_prop"
   trace_msg "Установлен профиль Canary: $model ($dev, SDK $sdk_init)"
 }
 
 select_compatible_canary() {
-  PIF_PROP="$PIF_DIR/custom.pif.prop"
-  [ -f "$PIF_PROP" ] || return 0
+  local pif_prop="$PIF_DIR/custom.pif.prop" first_line old_ifs
+  [ -f "$pif_prop" ] || return 0
   if [ -f /data/adb/omk_pif_sync_no_tangorpro ] || [ -f /data/adb/omk_pif_sync_no_pin ]; then
     return 0
   fi
@@ -425,8 +443,7 @@ ensure_probe_installed() {
 }
 
 _bundle_field() {
-  raw_b=$1
-  key_b=$2
+  local raw_b="$1" key_b="$2"
   printf '%s' "$raw_b" | awk -v k="$key_b" '
     {
       s = $0
@@ -445,6 +462,7 @@ _bundle_field() {
 }
 
 _local_quota_read() {
+  local today q_day q_used q_limit
   today=$(date -u +%Y-%m-%d 2>/dev/null || echo "1970-01-01")
   if [ -f "$QUOTA_FILE" ]; then
     IFS='|' read -r q_day q_used q_limit <<EOF
@@ -459,6 +477,7 @@ EOF
 }
 
 _local_quota_save() {
+  local today
   today=$(date -u +%Y-%m-%d 2>/dev/null || echo "1970-01-01")
   mkdir -p /data/adb 2>/dev/null || true
   printf '%s|%s|%s\n' "$today" "${1:-0}" "${2:-10000}" > "$QUOTA_FILE"
@@ -466,6 +485,7 @@ _local_quota_save() {
 }
 
 get_probe_quota() {
+  local ep raw lq l_used l_limit s_used s_limit s_pers s_exh used limit rem
   if ! ensure_probe_installed; then
     echo "QUOTA_OK=0"
     echo "QUOTA_ERR=OMKIntegrityProbe не установлен"
@@ -507,8 +527,7 @@ get_probe_quota() {
 }
 
 _run_probe_once() {
-  ep=$1
-  proj=$2
+  local ep="$1" proj="$2" lq l_used l_limit raw_call err_code q_exh err s_used s_limit verdict labels app_v s_pers l_next eff_used eff_limit eff_rem dev_now sdk_now inj_on kb_status krc b_ok d_ok s_ok
 
   lq=$(_local_quota_read)
   l_used=${lq%%"|"*}
@@ -599,9 +618,11 @@ _run_probe_once() {
   inj_on=$(toml_get_in_section "$OMK_INJ" main enabled 2>/dev/null || echo "false")
   kb_status="MISSING"
   if [ -s "$OMK_KEYBOX" ]; then
-    if validate_keybox_file "$OMK_KEYBOX" >/dev/null 2>&1; then
+    krc=0
+    validate_keybox_file "$OMK_KEYBOX" >/dev/null 2>&1 || krc=$?
+    if [ "$krc" -eq 0 ]; then
       kb_status="LIVE"
-    elif [ "$?" -eq 2 ]; then
+    elif [ "$krc" -eq 2 ]; then
       kb_status="OFFLINE"
     else
       kb_status="REVOKED"
@@ -609,17 +630,17 @@ _run_probe_once() {
   fi
 
   b_ok=0; d_ok=0; s_ok=0
+  if printf '%s' "$labels" | grep -q 'MEETS_BASIC_INTEGRITY'; then
+    b_ok=1
+  fi
   if [ "$verdict" = "STRONG" ]; then
     b_ok=1; d_ok=1; s_ok=1
   elif [ "$verdict" = "DEVICE" ]; then
     b_ok=1; d_ok=1
-    if [ "$inj_on" = "true" ] && [ "$kb_status" = "LIVE" ] && toml_verify_injector_safe "$OMK_INJ" >/dev/null 2>&1; then
+    if [ "$inj_on" = "true" ] && [ "$kb_status" = "LIVE" ] && [ ! -f /data/adb/modules/oh_my_keymint/disable ] && [ -S "$OMK_DIR/rpc.sock" ] && toml_verify_injector_safe "$OMK_INJ" >/dev/null 2>&1; then
       s_ok=1
     fi
   elif [ "$verdict" = "BASIC" ]; then
-    b_ok=1
-  elif [ "$inj_on" = "false" ] && [ "$(read_pif_val spoofProvider "$PIF_DIR/custom.pif.prop" 2>/dev/null || echo 0)" = "1" ]; then
-    # In BASIC-only mode without keybox, Google Play Store still grants MEETS_BASIC_INTEGRITY
     b_ok=1
   fi
   save_last_status "$b_ok" "$d_ok" "$s_ok" "$kb_status"
@@ -642,6 +663,7 @@ _run_probe_once() {
 }
 
 check_play_integrity() {
+  local ep proj dev_now rc1 out1 v1
   if ! ensure_probe_installed; then
     echo "RESULT_MODE=HEADLESS"
     echo "RESULT_VERDICT=ERROR"
@@ -673,6 +695,7 @@ check_play_integrity() {
 }
 
 verify_and_autofix_fingerprint() {
+  local inj_state cur_out cur_v best_out best_rank cur_dev cur_prod cur_model cur_sdk best_row last_row cand_list total_cand try_idx old_ifs row d p m s out v rank best_v
   trace_msg "Запуск проверки Integrity и автоподбора фингерпринта..."
   inj_state=$(toml_get_in_section "$OMK_INJ" main enabled 2>/dev/null || echo "true")
 
@@ -767,6 +790,7 @@ verify_and_autofix_fingerprint() {
 }
 
 run_pif() {
+  local matchflag="-m"
   if [ ! -f "$PIF_DIR/autopif4.sh" ]; then
     log_msg "WARN: $PIF_DIR/autopif4.sh not found, skipping fetch"
     return 1
@@ -775,10 +799,9 @@ run_pif() {
     set +o standalone
     unset ASH_STANDALONE
   fi
-  MATCHFLAG=-m
-  [ -f "$PIF_DIR/skipmatchdevice" ] && MATCHFLAG=""
+  [ -f "$PIF_DIR/skipmatchdevice" ] && matchflag=""
   trace_msg "Загружаем свежий профиль Android Canary (autopif4)..."
-  if sh "$PIF_DIR/autopif4.sh" $MATCHFLAG >>"$LOG_FILE" 2>&1; then
+  if sh "$PIF_DIR/autopif4.sh" $matchflag >>"$LOG_FILE" 2>&1; then
     trace_msg "Canary-профиль успешно обновлён, подбираем устройство под SDK..."
     force_tangorpro_canary
     return 0
@@ -789,7 +812,7 @@ run_pif() {
 }
 
 refresh_crl_cache() {
-  force=${1:-0}
+  local force="${1:-0}" now mtime age tmp
   if [ "$force" != "1" ] && [ -s "$CRL_CACHE" ]; then
     now=$(date +%s 2>/dev/null || echo 0)
     mtime=$(stat -c %Y "$CRL_CACHE" 2>/dev/null || echo 0)
@@ -832,7 +855,7 @@ hex_to_dec() {
 # Inspect every PEM certificate in keybox.xml: checks structure, X.509 dates (except root), and Google CRL.
 # Returns 0 if valid & non-revoked, 1 if revoked/expired/invalid, 2 if CRL unavailable.
 validate_keybox_file() {
-  kb_file=$1
+  local kb_file="$1" kb_tmp now_utc serials cert_err cf info ser st_rest date_res dec
   [ -s "$kb_file" ] || return 1
   grep -q '<AndroidAttestation>' "$kb_file" 2>/dev/null || return 1
   grep -q 'BEGIN CERTIFICATE' "$kb_file" 2>/dev/null || return 1
@@ -956,7 +979,7 @@ validate_keybox_file() {
 }
 
 install_keybox_file() {
-  src_xml=$1
+  local src_xml="$1" new_hash old_hash
   new_hash=$(sha256sum "$src_xml" 2>/dev/null | awk '{print $1}')
   old_hash=$(sha256sum "$OMK_KEYBOX" 2>/dev/null | awk '{print $1}')
   if [ -d "$OMK_DIR" ]; then
@@ -982,7 +1005,7 @@ install_keybox_file() {
 }
 
 fetch_specter_keybox() {
-  out_xml=$1
+  local out_xml="$1" cat_file now_iso candidates raw_blob dec_blob old_ifs line src ver
   cat_file="/data/local/tmp/omk_specter_cat.$$"
   if ! download_url "$SPECTER_CATALOG_PRIMARY" > "$cat_file" 2>/dev/null || ! grep -q '"entries"' "$cat_file" 2>/dev/null; then
     download_url "$SPECTER_CATALOG_FALLBACK" > "$cat_file" 2>/dev/null || true
@@ -1052,7 +1075,7 @@ fetch_specter_keybox() {
 }
 
 fetch_meowdump_keybox() {
-  out_xml=$1
+  local out_xml="$1" cur i nxt hex_out
   trace_msg "Проверяем keybox MeowDump и сверяем с базой отзывов Google CRL..."
   cur="/data/local/tmp/omk_md_0.$$"
   if ! download_url "$MEOWDUMP_URL" > "$cur" 2>/dev/null || [ ! -s "$cur" ]; then
@@ -1092,7 +1115,7 @@ fetch_meowdump_keybox() {
 }
 
 fetch_yurikey_keybox() {
-  out_xml=$1
+  local out_xml="$1" raw
   trace_msg "Проверяем keybox Yurikey и сверяем с базой отзывов Google CRL..."
   raw="/data/local/tmp/omk_yk.$$"
   if ! download_url "$YURIKEY_URL" > "$raw" 2>/dev/null || [ ! -s "$raw" ]; then
@@ -1110,7 +1133,7 @@ fetch_yurikey_keybox() {
 }
 
 fetch_custom_url_keybox() {
-  out_xml=$1
+  local out_xml="$1" url raw
   [ -s "$CUSTOM_URL_CFG" ] || return 1
   url=$(tr -d '\r\n' < "$CUSTOM_URL_CFG")
   [ -n "$url" ] || return 1
@@ -1135,6 +1158,7 @@ fetch_custom_url_keybox() {
 }
 
 update_keybox() {
+  local rc provider dec_file fetched ins_rc
   if [ "${FORCE_KEYBOX:-0}" != "1" ] && [ -f /data/adb/omk_pif_sync_keep_keybox ]; then
     log_msg "Keeping local keybox (/data/adb/omk_pif_sync_keep_keybox present)"
     if validate_keybox_file "$OMK_KEYBOX"; then
@@ -1186,16 +1210,12 @@ update_keybox() {
 }
 
 read_pif_val() {
-  key=$1
-  file=$2
+  local key="$1" file="$2"
   sed -n "s/^${key}=//p" "$file" | head -n 1 | cut -d '#' -f 1 | tr -d '\r' | sed 's/[[:space:]]*$//'
 }
 
 toml_set_in_section() {
-  file=$1
-  section=$2
-  key=$3
-  val=$4
+  local file="$1" section="$2" key="$3" val="$4" orig_val dir base tmp
   [ -f "$file" ] || return 1
   orig_val=$(toml_get_in_section "$file" "$section" "$key" 2>/dev/null || echo "<ABSENT>")
   dir=${file%/*}
@@ -1232,6 +1252,7 @@ toml_set_in_section() {
 }
 
 ensure_injector_scoop() {
+  local dir base tmp
   [ -f "$OMK_INJ" ] || return 0
   if ! grep -q '"io.github.vvb2060.keyattestation"' "$OMK_INJ"; then
     dir=${OMK_INJ%/*}
@@ -1253,97 +1274,99 @@ ensure_injector_scoop() {
 }
 
 sync_boot_hash() {
-  VB_HASH=$(getprop ro.boot.vbmeta.digest)
-  if [ -z "$VB_HASH" ] && [ -e /dev/block/by-name/vbmeta ]; then
-    VB_HASH=$(sha256sum /dev/block/by-name/vbmeta 2>/dev/null | awk '{print $1}')
+  local vb_hash
+  vb_hash=$(getprop ro.boot.vbmeta.digest)
+  if [ -z "$vb_hash" ] && [ -e /dev/block/by-name/vbmeta ]; then
+    vb_hash=$(sha256sum /dev/block/by-name/vbmeta 2>/dev/null | awk '{print $1}')
   fi
-  [ -n "$VB_HASH" ] || return 0
+  [ -n "$vb_hash" ] || return 0
   mkdir -p /data/adb
-  printf '%s\n' "$VB_HASH" > /data/adb/boot_hash
+  printf '%s\n' "$vb_hash" > /data/adb/boot_hash
   chmod 644 /data/adb/boot_hash
-  resetprop -n ro.boot.vbmeta.digest "$VB_HASH" >/dev/null 2>&1 || true
-  printf '%s' "$VB_HASH"
+  resetprop -n ro.boot.vbmeta.digest "$vb_hash" >/dev/null 2>&1 || true
+  printf '%s' "$vb_hash"
 }
 
 sync_tricky_compat() {
-  PATCH_DATE=$1
+  local patch_date="$1"
   mkdir -p "$TS_DIR"
-  if [ -n "$PATCH_DATE" ]; then
+  if [ -n "$patch_date" ]; then
     cat > "$TS_DIR/security_patch.txt" <<EOF
 system=prop
-boot=$PATCH_DATE
-vendor=$PATCH_DATE
+boot=$patch_date
+vendor=$patch_date
 EOF
   fi
 }
 
 sync_omk_config() {
-  PIF_FILE="$PIF_DIR/custom.pif.prop"
-  [ -f "$PIF_FILE" ] || PIF_FILE="$PIF_DIR/pif.prop"
-  if [ ! -f "$PIF_FILE" ]; then
+  local pif_file brand device manufacturer model product security_patch y m d vb_hash
+  pif_file="$PIF_DIR/custom.pif.prop"
+  [ -f "$pif_file" ] || pif_file="$PIF_DIR/pif.prop"
+  if [ ! -f "$pif_file" ]; then
     log_msg "ERROR: No PIF prop file found in $PIF_DIR"
     return 1
   fi
 
-  BRAND=$(read_pif_val BRAND "$PIF_FILE")
-  DEVICE=$(read_pif_val DEVICE "$PIF_FILE")
-  MANUFACTURER=$(read_pif_val MANUFACTURER "$PIF_FILE")
-  MODEL=$(read_pif_val MODEL "$PIF_FILE")
-  PRODUCT=$(read_pif_val PRODUCT "$PIF_FILE")
-  SECURITY_PATCH=$(read_pif_val SECURITY_PATCH "$PIF_FILE")
-  [ -n "$SECURITY_PATCH" ] || SECURITY_PATCH=$(read_pif_val ro.build.version.security_patch "$PIF_FILE")
+  brand=$(read_pif_val BRAND "$pif_file")
+  device=$(read_pif_val DEVICE "$pif_file")
+  manufacturer=$(read_pif_val MANUFACTURER "$pif_file")
+  model=$(read_pif_val MODEL "$pif_file")
+  product=$(read_pif_val PRODUCT "$pif_file")
+  security_patch=$(read_pif_val SECURITY_PATCH "$pif_file")
+  [ -n "$security_patch" ] || security_patch=$(read_pif_val ro.build.version.security_patch "$pif_file")
 
-  if [ -z "$SECURITY_PATCH" ]; then
+  if [ -z "$security_patch" ]; then
     y=$(date +%Y)
     m=$(date +%m | sed 's/^0*//')
     d=$(date +%d | sed 's/^0*//')
     if [ "$d" -lt 10 ]; then
       if [ "$m" -eq 1 ]; then m=12; y=$((y - 1)); else m=$((m - 1)); fi
     fi
-    SECURITY_PATCH=$(printf '%04d-%02d-05' "$y" "$m")
+    security_patch=$(printf '%04d-%02d-05' "$y" "$m")
   fi
 
-  VB_HASH=$(sync_boot_hash)
-  sync_tricky_compat "$SECURITY_PATCH"
+  vb_hash=$(sync_boot_hash)
+  sync_tricky_compat "$security_patch"
 
   if [ ! -f "$OMK_CFG" ]; then
     log_msg "ERROR: $OMK_CFG not found (is Oh My KeyMint installed?)"
     return 1
   fi
 
-  [ -n "$BRAND" ] && toml_set_in_section "$OMK_CFG" device brand "$BRAND"
-  [ -n "$DEVICE" ] && toml_set_in_section "$OMK_CFG" device device "$DEVICE"
-  [ -n "$MANUFACTURER" ] && toml_set_in_section "$OMK_CFG" device manufacturer "$MANUFACTURER"
-  [ -n "$MODEL" ] && toml_set_in_section "$OMK_CFG" device model "$MODEL"
-  [ -n "$PRODUCT" ] && toml_set_in_section "$OMK_CFG" device product "$PRODUCT"
-  toml_set_in_section "$OMK_CFG" trust security_patch "$SECURITY_PATCH"
-  toml_set_in_section "$OMK_CFG" trust os_patchlevel "$SECURITY_PATCH"
-  toml_set_in_section "$OMK_CFG" trust boot_patchlevel "$SECURITY_PATCH"
-  toml_set_in_section "$OMK_CFG" trust vendor_patchlevel "$SECURITY_PATCH"
-  [ -n "$VB_HASH" ] && toml_set_in_section "$OMK_CFG" trust vb_hash "$VB_HASH"
+  [ -n "$brand" ] && toml_set_in_section "$OMK_CFG" device brand "$brand"
+  [ -n "$device" ] && toml_set_in_section "$OMK_CFG" device device "$device"
+  [ -n "$manufacturer" ] && toml_set_in_section "$OMK_CFG" device manufacturer "$manufacturer"
+  [ -n "$model" ] && toml_set_in_section "$OMK_CFG" device model "$model"
+  [ -n "$product" ] && toml_set_in_section "$OMK_CFG" device product "$product"
+  toml_set_in_section "$OMK_CFG" trust security_patch "$security_patch"
+  toml_set_in_section "$OMK_CFG" trust os_patchlevel "$security_patch"
+  toml_set_in_section "$OMK_CFG" trust boot_patchlevel "$security_patch"
+  toml_set_in_section "$OMK_CFG" trust vendor_patchlevel "$security_patch"
+  [ -n "$vb_hash" ] && toml_set_in_section "$OMK_CFG" trust vb_hash "$vb_hash"
 
   chown 1017:1017 "$OMK_CFG"
   chmod 0660 "$OMK_CFG"
   ensure_injector_scoop
-  trace_msg "Синхронизирован Oh My KeyMint: $DEVICE (патч $SECURITY_PATCH)"
+  trace_msg "Синхронизирован Oh My KeyMint: $device (патч $security_patch)"
   return 0
 }
 
 configure_zygisk_hide() {
-  ZN=/data/adb/modules/zygisksu/bin/zygiskd
-  if [ -x "$ZN" ]; then
-    "$ZN" enforce-denylist just_umount >/dev/null 2>&1 || true
-    "$ZN" memory-type anonymous >/dev/null 2>&1 || true
-    "$ZN" linker builtin >/dev/null 2>&1 || true
+  local zn=/data/adb/modules/zygisksu/bin/zygiskd
+  if [ -x "$zn" ]; then
+    "$zn" enforce-denylist just_umount >/dev/null 2>&1 || true
+    "$zn" memory-type anonymous >/dev/null 2>&1 || true
+    "$zn" linker builtin >/dev/null 2>&1 || true
   fi
 }
 
 reload_omk() {
+  local i=0
   if [ -d "$OMK_STATE" ]; then
     rm -f "$OMK_DIR/rpc.sock" 2>/dev/null || true
     : > "$OMK_STATE/restart.all"
     log_msg "Triggered Oh My KeyMint restart ($OMK_STATE/restart.all)"
-    i=0
     while [ "$i" -lt 12 ]; do
       if [ -S "$OMK_DIR/rpc.sock" ] && [ -f "$OMK_STATE/injector-daemon.pid" ]; then
         break

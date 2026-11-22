@@ -7,8 +7,38 @@ case "${1:-}" in
   --auto|--basic) AUTO_MODE=1 ;;
 esac
 
+LOCK_DIR=/data/local/tmp/omk_action.lock.d
+acquire_lock() {
+  if mkdir "$LOCK_DIR" 2>/dev/null; then
+    echo "$$" > "$LOCK_DIR/pid"
+    return 0
+  fi
+  local old_pid=""
+  [ -f "$LOCK_DIR/pid" ] && old_pid=$(cat "$LOCK_DIR/pid" 2>/dev/null || echo "")
+  if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
+    if tr '\0' ' ' < "/proc/$old_pid/cmdline" 2>/dev/null | grep -q 'action\.sh'; then
+      echo "RESULT_BUSY=1"
+      echo "RESULT_LABELS=Другая настройка уже выполняется (PID $old_pid)"
+      return 1
+    fi
+  fi
+  rm -rf "$LOCK_DIR" 2>/dev/null || true
+  if mkdir "$LOCK_DIR" 2>/dev/null; then
+    echo "$$" > "$LOCK_DIR/pid"
+    return 0
+  fi
+  echo "RESULT_BUSY=1"
+  echo "RESULT_LABELS=Не удалось захватить блокировку запуска"
+  return 1
+}
+
+acquire_lock || exit 2
+trap 'rm -rf "$LOCK_DIR" 2>/dev/null || true' EXIT INT TERM
+
 : > "$LOG_FILE"
 reset_trace
+
+check_required_modules || exit 1
 
 if [ "$AUTO_MODE" = "1" ]; then
   trace_msg "Проверяем текущее состояние keybox и Play Integrity..."
@@ -32,14 +62,28 @@ if [ "$AUTO_MODE" = "1" ]; then
   fi
 
   inj_now=$(toml_get_in_section "$OMK_INJ" main enabled 2>/dev/null || echo "false")
+  sp_now=$(read_pif_val spoofProvider "$PIF_DIR/custom.pif.prop" 2>/dev/null || echo "0")
+  pif_dev=$(read_pif_val DEVICE "$PIF_DIR/custom.pif.prop" 2>/dev/null || echo "")
+  omk_dev=$(toml_get_in_section "$OMK_CFG" device device 2>/dev/null || echo "")
+
   if [ "$kb_live" -ge 1 ] && [ -f "$PIF_DIR/custom.pif.prop" ]; then
+    need_reload=0
     if [ "$inj_now" != "true" ]; then
+      trace_msg "Обнаружен выключенный OMK injector — включаем обратно..."
       set_omk_injector_enabled true || { reload_omk; trace_msg "ОШИБКА: небезопасный фильтр OMK"; exit 1; }
-      set_pif_prop spoofProvider 0
-      sync_omk_config >/dev/null 2>&1 || true
-      reload_omk
+      need_reload=1
     fi
+    if [ "$sp_now" != "0" ]; then
+      force_basic_settings
+      need_reload=1
+    fi
+    if [ "$pif_dev" != "$omk_dev" ] || [ ! -S "$OMK_DIR/rpc.sock" ]; then
+      sync_omk_config >/dev/null 2>&1 || true
+      need_reload=1
+    fi
+    [ "$need_reload" = "1" ] && reload_omk
     cleanup_google
+
     cur_check=$(check_play_integrity) || true
     cur_b=$(printf '%s\n' "$cur_check" | sed -n 's/^RESULT_BASIC=//p' | head -n 1)
     cur_d=$(printf '%s\n' "$cur_check" | sed -n 's/^RESULT_DEVICE=//p' | head -n 1)
@@ -81,15 +125,13 @@ if [ "$AUTO_MODE" = "1" ]; then
     exit 0
   fi
 
-  # Keybox is live: ensure OMK is active
   set_omk_injector_enabled true || { reload_omk; trace_msg "ОШИБКА: небезопасный фильтр OMK"; exit 1; }
-  set_pif_prop spoofProvider 0
+  force_basic_settings
   sync_omk_config || exit 1
   configure_zygisk_hide
   reload_omk
   cleanup_google
 
-  # If we only replaced a dead keybox and already have a fingerprint, check it first before overwriting
   if [ "$kb_replaced" = "1" ] && [ -f "$PIF_DIR/custom.pif.prop" ]; then
     after_kb=$(check_play_integrity) || true
     ab=$(printf '%s\n' "$after_kb" | sed -n 's/^RESULT_BASIC=//p' | head -n 1)
@@ -104,7 +146,6 @@ if [ "$AUTO_MODE" = "1" ]; then
     fi
   fi
 
-  # Need a working fingerprint: pull fresh Canary, match SDK, and rotate profiles until Device+Strong pass
   run_pif || true
   force_tangorpro_canary
   force_basic_settings

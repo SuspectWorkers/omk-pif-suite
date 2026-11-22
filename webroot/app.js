@@ -54,6 +54,7 @@
 
   let cbCounter = 0;
   let busyDepth = 0;
+  let actionInFlight = false;
   let resultTimerId = null;
 
   function log(msg) {
@@ -482,7 +483,10 @@
     try {
       const res = await execRoot(
         `echo "PIF=$(grep -m1 ^version= ${PIF_DIR}/module.prop 2>/dev/null | cut -d= -f2)"\n` +
+        `echo "PIF_DIS=$([ -f ${PIF_DIR}/disable ] && echo 1 || echo 0)"\n` +
         `echo "OMK=$(grep -m1 ^version= /data/adb/modules/oh_my_keymint/module.prop 2>/dev/null | cut -d= -f2)"\n` +
+        `echo "OMK_DIS=$([ -f /data/adb/modules/oh_my_keymint/disable ] && echo 1 || echo 0)"\n` +
+        `echo "OMK_SOCK=$([ -S /data/misc/keystore/omk/rpc.sock ] && echo 1 || echo 0)"\n` +
         `echo "INJ=$(. "${SUITE_DIR}/common.sh" && toml_get_in_section "${OMK_INJ}" main enabled 2>/dev/null || echo '?')"\n` +
         `echo "FILT=$(. "${SUITE_DIR}/common.sh" && toml_verify_injector_safe "${OMK_INJ}" >/dev/null 2>&1 && echo safe || echo unsafe)"\n` +
         `echo "PATCH=$(getprop ro.build.version.security_patch)"\n` +
@@ -502,11 +506,13 @@
         if (i > 0) map[l.slice(0, i)] = l.slice(i + 1).trim();
       });
       const dev = state.build.DEVICE || '-';
-      document.getElementById('stPif').textContent = `${map.PIF || 'нет'} (${dev})`;
+      document.getElementById('stPif').textContent = `${map.PIF || 'нет'}${map.PIF_DIS === '1' ? ' (off!)' : ''} (${dev})`;
       const omkEl = document.getElementById('stOmk');
-      const injState = map.INJ === 'false' ? 'off' : (map.INJ === 'true' ? 'on' : '?');
+      const omkDis = map.OMK_DIS === '1';
+      const omkSock = map.OMK_SOCK === '1';
+      const injState = omkDis ? 'модуль выкл!' : (map.INJ === 'false' ? 'off' : (map.INJ === 'true' ? (omkSock ? 'on' : 'нет rpc!') : '?'));
       omkEl.textContent = `${map.OMK || 'нет'} (${injState}${map.FILT === 'unsafe' ? ', unsafe!' : ''})`;
-      omkEl.className = 'stat-v ' + (map.FILT === 'unsafe' ? 'badge-bad' : (map.INJ === 'false' ? 'badge-warn' : ''));
+      omkEl.className = 'stat-v ' + (omkDis || map.FILT === 'unsafe' ? 'badge-bad' : ((map.INJ === 'false' || !omkSock) ? 'badge-warn' : ''));
 
       // Compute Basic / Device / Strong chips above status pill with strict hierarchy:
       // Strong requires Device + live non-banned keybox + safe OMK; Device requires Basic + good fingerprint
@@ -519,10 +525,10 @@
       } else if (map.INJ === 'false') {
         bOk = true; dOk = false; sOk = false;
       }
-      if (map.KB !== 'present' || map.KBCRL === 'revoked' || map.INJ !== 'true' || map.FILT !== 'safe') {
+      if (omkDis || !omkSock || map.KB !== 'present' || map.KBCRL === 'revoked' || map.INJ !== 'true' || map.FILT !== 'safe') {
         sOk = false;
       }
-      if (map.INJ === 'false') {
+      if (omkDis || map.INJ === 'false') {
         dOk = false; sOk = false;
       }
       if (bOk === false) {
@@ -531,7 +537,7 @@
       if (dOk === false) {
         sOk = false;
       }
-      if (map.KBCRL === 'live' && map.INJ === 'true' && map.FILT === 'safe' && dOk === true && bOk === true) {
+      if (!omkDis && omkSock && map.KBCRL === 'live' && map.INJ === 'true' && map.FILT === 'safe' && dOk === true && bOk === true) {
         sOk = true;
       }
       setPiChip('chipBasic', 'Basic', bOk);
@@ -545,18 +551,18 @@
       if (powerStage && autoDot && autoText) {
         powerStage.classList.remove('is-on', 'is-basic');
         autoDot.classList.remove('is-on', 'is-basic');
-        if (map.INJ === 'true' && map.FILT === 'safe' && map.KB === 'present') {
+        if (!omkDis && omkSock && map.INJ === 'true' && map.FILT === 'safe' && map.KB === 'present') {
           powerStage.classList.add('is-on');
           autoDot.classList.add('is-on');
           autoText.textContent = sOk ? `Активно (Strong) • ${dev}` : `Активно • ${dev}`;
           if (autoBtnLbl) autoBtnLbl.textContent = 'ON';
-        } else if (map.INJ === 'false') {
+        } else if (map.INJ === 'false' && !omkDis) {
           powerStage.classList.add('is-basic');
           autoDot.classList.add('is-basic');
           autoText.textContent = `Режим BASIC • ${dev}`;
           if (autoBtnLbl) autoBtnLbl.textContent = 'BASIC';
         } else {
-          autoText.textContent = 'Требуется настройка';
+          autoText.textContent = omkDis ? 'OhMyKeymint отключён' : 'Требуется настройка';
           if (autoBtnLbl) autoBtnLbl.textContent = 'AUTO';
         }
       }
@@ -822,6 +828,11 @@
   }
 
   async function runDetachedWithTrace(title, sub, shellCmd) {
+    if (actionInFlight) {
+      toast('Операция уже выполняется');
+      return { code: 2, stdout: 'RESULT_BUSY=1\nRESULT_LABELS=Операция уже выполняется', stderr: '' };
+    }
+    actionInFlight = true;
     showLoading(title, sub, true);
     await nextPaint();
     const id = `${Date.now()}_${++cbCounter}`;
@@ -831,21 +842,30 @@
     const b64Cmd = toBase64Utf8(shellCmd);
 
     try {
-      await execRoot(
-        `: > "${LIVE_TRACE}" && rm -f "${outFile}" "${rcFile}" && ` +
+      const startRes = await execRoot(
+        `if [ -f /data/local/tmp/omk_action.lock.d/pid ]; then ` +
+          `opid=$(cat /data/local/tmp/omk_action.lock.d/pid 2>/dev/null); ` +
+          `if [ -n "$opid" ] && kill -0 "$opid" 2>/dev/null && tr '\\0' ' ' < "/proc/$opid/cmdline" 2>/dev/null | grep -q 'action\\.sh'; then ` +
+            `echo "__OMK_ATTACH__=$opid"; exit 0; ` +
+          `fi; ` +
+        `fi; ` +
+        `rm -f /data/local/tmp/omk_bg_*.out /data/local/tmp/omk_bg_*.rc /data/local/tmp/omk_bg_*.sh 2>/dev/null || true; ` +
+        `: > "${LIVE_TRACE}" && ` +
         `printf '%s' '${b64Cmd}' | base64 -d > "${runFile}" && chmod 0755 "${runFile}" && ` +
         `sh -c 'sh "'"${runFile}"'" >"'"${outFile}"'" 2>&1; echo $? > "'"${rcFile}"'"' >/dev/null 2>&1 </dev/null &`
       );
 
+      const attachMatch = /__OMK_ATTACH__=(\d+)/.exec(startRes.stdout || '');
+      const attachedPid = attachMatch ? attachMatch[1] : null;
+
       let exitCode = null;
       let lastTrace = '';
-      for (let tick = 0; tick < 360; tick++) {
+      for (let tick = 0; tick < 600; tick++) {
         await sleep(450);
-        const poll = await execRoot(
-          `if [ -f "${rcFile}" ]; then echo "__OMK_DONE__=$(cat "${rcFile}")"; fi\n` +
-          `echo "__OMK_TRACE__"\n` +
-          `tail -n 14 "${LIVE_TRACE}" 2>/dev/null || true`
-        );
+        const pollCmd = attachedPid
+          ? `if ! kill -0 ${attachedPid} 2>/dev/null; then echo "__OMK_DONE__=0"; fi\necho "__OMK_TRACE__"\ntail -n 14 "${LIVE_TRACE}" 2>/dev/null || true`
+          : `if [ -f "${rcFile}" ]; then echo "__OMK_DONE__=$(cat "${rcFile}")"; fi\necho "__OMK_TRACE__"\ntail -n 14 "${LIVE_TRACE}" 2>/dev/null || true`;
+        const poll = await execRoot(pollCmd);
         const text = poll.stdout || '';
         const marker = text.indexOf('__OMK_TRACE__');
         const head = marker >= 0 ? text.slice(0, marker) : '';
@@ -861,12 +881,24 @@
         }
       }
 
+      if (attachedPid) {
+        const stRes = await execRoot(
+          `if [ -f "${LAST_STATUS_FILE}" ]; then ` +
+            `IFS='|' read -r b d s kb _ < "${LAST_STATUS_FILE}"; ` +
+            `echo "RESULT_BASIC=$b"; echo "RESULT_DEVICE=$d"; echo "RESULT_STRONG=$s"; echo "RESULT_KEYBOX=$kb"; ` +
+            `[ "$s" = "1" ] && echo "RESULT_VERDICT=STRONG" || { [ "$d" = "1" ] && echo "RESULT_VERDICT=DEVICE" || { [ "$b" = "1" ] && echo "RESULT_VERDICT=BASIC" || echo "RESULT_VERDICT=NONE"; }; }; ` +
+          `fi; tail -n 20 "${SYNC_LOG}" 2>/dev/null || true`
+        );
+        return { code: 0, stdout: stRes.stdout || '', stderr: '' };
+      }
+
       const outRes = await execRoot(`cat "${outFile}" 2>/dev/null || true; rm -f "${outFile}" "${rcFile}" "${runFile}"`);
       if (exitCode === null) {
         return { code: 124, stdout: outRes.stdout || '', stderr: 'Таймаут ожидания операции' };
       }
       return { code: exitCode, stdout: outRes.stdout || '', stderr: '' };
     } finally {
+      actionInFlight = false;
       hideLoading();
     }
   }
@@ -890,6 +922,10 @@
         const idx = l.indexOf('=');
         if (idx > 0 && l.startsWith('RESULT_')) map[l.slice(0, idx)] = l.slice(idx + 1).trim();
       });
+      if (res.code === 2 || map.RESULT_BUSY === '1') {
+        toast('Операция уже выполняется');
+        return;
+      }
       const v = map.RESULT_VERDICT || 'ERROR';
       const prof = map.RESULT_PROFILE || state.build.DEVICE || '-';
       const labels = map.RESULT_LABELS || '';
@@ -947,6 +983,11 @@
 
       await loadConfig();
       await loadStatus();
+
+      if (res.code === 2 || map.RESULT_BUSY === '1') {
+        toast('Операция уже выполняется');
+        return;
+      }
 
       const bOk = map.RESULT_BASIC === '1' || map.RESULT_VERDICT === 'STRONG' || map.RESULT_VERDICT === 'DEVICE';
       const dOk = map.RESULT_DEVICE === '1' || map.RESULT_VERDICT === 'STRONG' || map.RESULT_VERDICT === 'DEVICE';
