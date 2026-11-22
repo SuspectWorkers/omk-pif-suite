@@ -1,29 +1,28 @@
 # OMK PIF Suite
 
-![Version](https://img.shields.io/badge/version-v1.7.0-4f8cff?style=flat-square)
+![Version](https://img.shields.io/badge/version-v1.8.0-4f8cff?style=flat-square)
 ![Platform](https://img.shields.io/badge/Android-13%2B-3ddc84?style=flat-square)
 ![Root](https://img.shields.io/badge/KernelSU%20%7C%20Magisk%20%7C%20APatch-compatible-blue?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square)
 
-All-in-one **KernelSU / Magisk / APatch** module with a mobile-responsive **WebUI** (**Basic** and **PRO** modes) for managing **PlayIntegrityFork** (`custom.pif.prop`), verifying real device verdicts via our **proprietary autonomous Play Integrity verification system**, and safely syncing device/attestation metadata into **Oh My KeyMint (OMK)** on Android 13–17+.
+All-in-one **KernelSU / Magisk / APatch** module with auto-update (`updateJson`) and a mobile-responsive **WebUI** (**AUTO** and **PRO** modes) for managing **PlayIntegrityFork** (`custom.pif.prop`), verifying real device verdicts via our **proprietary autonomous Play Integrity verification system**, and safely syncing device/attestation metadata into **Oh My KeyMint (OMK)** on Android 13–17+.
 
 ---
 
 ## Features
 
+- **One-Tap `AUTO` Mode with Live Step-by-Step Trace:**
+  - Centered single-button screen: fetches fresh Canary, selects SDK-compatible Pixel profile (`A13–A17+`), cascades keybox providers with X.509 + Google CRL validation, runs autonomous background Play Integrity verification (rotating profiles if needed, or falling back cleanly to **BASIC** if all keyboxes are revoked), and streams human-readable live progress right beneath the loading spinner.
 - **Proprietary Autonomous Play Integrity Verification System:**
-  - Runs **100% silently in the background** without opening Play Store, touching the screen, or relying on third-party checker apps.
-  - Tracks daily check quota (**used / remaining**) directly in the WebUI status bar and aborts cleanly if the daily limit is reached.
-  - **SDK-Aware Pixel Canary Selection (A13–A17+):** automatically picks compatible Pixel Canary profiles for the device's Android SDK (`tangorpro`/`felix` on A13–14, `tegu` on A15, `frankel` on A16, `kodiak` on A17+) and rotates automatically if verification returns `NONE`/`BASIC`.
+  - Runs **100% silently in the background** without opening Play Store or relying on third-party checker apps.
+  - Resets Play Store's local rate-limit counters cleanly to prevent `-8` (`TOO_MANY_REQUESTS`) throttling errors during multi-profile rotation, and tracks daily quota (**used / remaining**).
 - **OMK Filter Safety Guard & Clean Uninstall (`uninstall.sh`):**
   - Verifies `[filter] enabled = true` and `block_android_package = true` in `/data/misc/keystore/omk/injector.toml` before enabling `[main].enabled = true` (prevents `system_server` Keystore interception / lockscreen PIN bootloop).
   - Performs atomic writes preserving owner, permissions, and SELinux context, records original values, and safely restores them upon module removal (`uninstall.sh`).
 - **Multi-Provider Keybox Cascade (`Specter/TAKR`, `MeowDump`, `Yurikey`, `Custom URL`):**
   - Automatically scans multiple keybox providers, validates X.509 certificate dates, and verifies **every certificate in the chain** against Google's live CRL (`android.googleapis.com/attestation/status`) *before* installing.
-  - If all public keyboxes are revoked or expired, automatically switches to **BASIC-only fallback** (`injector.toml enabled = false` + `spoofProvider=1`) so Play Integrity never drops to `Labels: []`.
-- **Two WebUI Modes (`Basic` & `PRO`):**
-  - **Basic Mode (default):** one large centered **"Full Sync"** button (`action.sh --basic`) plus **Verify Integrity + Auto-Pick**, **Check Keybox (CRL)**, **Quota Check**, **BASIC-only fallback**, and custom `keybox.xml` paste with full-screen neon SweetAlert2 result animations.
-  - **PRO Mode:** provider selector (`Auto`, `Specter`, `MeowDump`, `Yurikey`, `Custom URL`), full visual editor for **Build Fields**, **System Properties**, **Advanced Settings**, **Raw** `custom.pif.prop`, verified presets (`kodiak`, `frankel`, `tegu`, `tangorpro`, `felix`, `bluejay`), and `keep_keybox` / `no_tangorpro` flags.
+- **Full `PRO` Mode:**
+  - Exposes all manual tools: provider selector, visual editor for **Build Fields**, **System Properties**, **Advanced Settings**, **Raw** `custom.pif.prop`, verified presets (`kodiak`, `frankel`, `tegu`, `tangorpro`, `felix`, `bluejay`), manual quota/CRL/BASIC fallback triggers, custom `keybox.xml` paste, and `keep_keybox` / `no_tangorpro` flags.
 - **Automated Boot & Action Sync (`service.sh` / `action.sh`):**
   - Runs `PlayIntegrityFork` `autopif4.sh -m` once online (or on Action trigger).
   - Pins the fetched Canary build (`ID`, `INCREMENTAL`, `SECURITY_PATCH`) to **`tangorpro_beta` (`Pixel Tablet`, `DEVICE_INITIAL_SDK_INT=33`, `spoofVendingFinger=1`)** unless opted out.

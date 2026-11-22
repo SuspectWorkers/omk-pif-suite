@@ -32,6 +32,16 @@ MEOWDUMP_URL="https://github.com/MeowDump/Integ""rity-Box/releases/download/arch
 YURIKEY_URL="https://raw.githubusercontent.com/Yurii0307/yurikey/main/key"
 
 LOG_FILE=/data/local/tmp/omk_pif_sync.log
+LIVE_TRACE=/data/local/tmp/omk_live_trace.log
+
+reset_trace() {
+  : > "$LIVE_TRACE" 2>/dev/null || true
+}
+
+trace_msg() {
+  printf '[%s] %s\n' "$(date '+%H:%M:%S')" "$1" >> "$LIVE_TRACE" 2>/dev/null || true
+  printf '%s [OMK_PIF_SYNC] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" | tee -a "$LOG_FILE"
+}
 
 log_msg() {
   printf '%s [OMK_PIF_SYNC] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" | tee -a "$LOG_FILE"
@@ -56,11 +66,16 @@ download_url() {
   return 1
 }
 
+reset_finsky_throttle() {
+  rm -f /data/data/com.android.vending/shared_prefs/integrity_service_sharedprefs_*.xml 2>/dev/null || true
+}
+
 cleanup_google() {
   log_msg "Stopping Play Store and DroidGuard processes..."
   am force-stop com.android.vending >/dev/null 2>&1 || true
   killall com.google.android.gms.unstable >/dev/null 2>&1 || true
   killall com.android.vending >/dev/null 2>&1 || true
+  reset_finsky_throttle
   log_msg "Google Play Integrity processes stopped"
 }
 
@@ -230,12 +245,13 @@ set_omk_injector_enabled() {
   grep -q '^[[:space:]]*\[main\][[:space:]]*$' "$OMK_INJ" 2>/dev/null || { log_msg "ERROR: $OMK_INJ unparseable (missing [main])"; return 1; }
   grep -q '^[[:space:]]*\[filter\][[:space:]]*$' "$OMK_INJ" 2>/dev/null || { log_msg "ERROR: $OMK_INJ unparseable (missing [filter])"; return 1; }
 
+  trace_msg "Проверяем защиту [filter] в injector.toml..."
   orig_val=$(toml_get_in_section "$OMK_INJ" main enabled 2>/dev/null || echo "<ABSENT>")
   if [ "$state" = "true" ]; then
     if ! toml_verify_injector_safe "$OMK_INJ"; then
       _write_injector_main_enabled "$OMK_INJ" false >/dev/null 2>&1 || true
       record_omk_state "$OMK_INJ" main enabled "$orig_val" false
-      log_msg "ERROR: Refused to enable [main].enabled=true due to unsafe [filter]; forced [main].enabled=false"
+      trace_msg "БЛОК: небезопасный [filter] в OMK — инжектор принудительно выключен!"
       return 1
     fi
   fi
@@ -246,7 +262,7 @@ set_omk_injector_enabled() {
 }
 
 enable_basic_fallback() {
-  log_msg "Switching to BASIC-only fallback (no keybox, OMK injector off, spoofProvider=1)..."
+  trace_msg "Переключаемся в безопасный режим BASIC (без keybox, инжектор OMK выкл.)..."
   set_omk_injector_enabled false || return 1
   force_tangorpro_canary
   set_pif_prop spoofBuild 1
@@ -258,7 +274,7 @@ enable_basic_fallback() {
   reload_omk
   cleanup_google
   reset_finsky_integrity_cache
-  log_msg "BASIC-only fallback active"
+  trace_msg "Режим BASIC активирован (устройство пройдёт базовую проверку)"
 }
 
 get_profile_candidates() {
@@ -371,7 +387,7 @@ apply_pif_profile() {
     { print }
   ' "$PIF_PROP" > "$tmp" && mv "$tmp" "$PIF_PROP"
   chmod 0644 "$PIF_PROP"
-  log_msg "Applied Canary profile: $model ($dev, API $sdk_init): $NEW_FP"
+  trace_msg "Установлен профиль Canary: $model ($dev, SDK $sdk_init)"
 }
 
 select_compatible_canary() {
@@ -490,7 +506,7 @@ _run_probe_once() {
   l_used=${lq%%"|"*}
   l_limit=${lq#*"|"}
   if [ "$l_used" -ge "$l_limit" ]; then
-    log_msg "Local daily safety quota reached ($l_used/$l_limit); skipping check"
+    trace_msg "Дневной лимит проверок исчерпан ($l_used/$l_limit) — остановка"
     echo "RESULT_MODE=HEADLESS"
     echo "RESULT_VERDICT=QUOTA"
     echo "RESULT_LABELS=Дневной лимит проверок исчерпан ($l_used/$l_limit)"
@@ -510,6 +526,24 @@ _run_probe_once() {
     raw_call=$(content call --uri "content://${PROBE_PKG}.provider" --method check 2>&1 || true)
   fi
 
+  # Handle Play Store local -8 TOO_MANY_REQUESTS throttle cleanly
+  err_code=$(_bundle_field "$raw_call" errorCode 2>/dev/null || echo "")
+  if [ "$err_code" = "-8" ] || printf '%s' "$raw_call" | grep -qiE 'too many requests|throttled'; then
+    trace_msg "Сработал лимит запросов Play Store (-8) — сбрасываем счётчик и повторяем через 2с..."
+    am force-stop com.android.vending >/dev/null 2>&1 || true
+    reset_finsky_throttle
+    sleep 2
+    if [ -n "$ep" ] && [ -n "$proj" ]; then
+      raw_call=$(content call --uri "content://${PROBE_PKG}.provider" --method check --arg "$proj" --extra endpoint:s:"$ep" 2>&1 || true)
+    elif [ -n "$ep" ]; then
+      raw_call=$(content call --uri "content://${PROBE_PKG}.provider" --method check --arg "$ep" 2>&1 || true)
+    elif [ -n "$proj" ]; then
+      raw_call=$(content call --uri "content://${PROBE_PKG}.provider" --method check --arg "$proj" 2>&1 || true)
+    else
+      raw_call=$(content call --uri "content://${PROBE_PKG}.provider" --method check 2>&1 || true)
+    fi
+  fi
+
   if ! printf '%s' "$raw_call" | grep -q 'ok=true'; then
     q_exh=$(_bundle_field "$raw_call" quotaExhausted 2>/dev/null || echo "false")
     err=$(_bundle_field "$raw_call" error 2>/dev/null || echo "")
@@ -517,7 +551,7 @@ _run_probe_once() {
       s_used=$(_bundle_field "$raw_call" used 2>/dev/null || echo "$l_limit")
       s_limit=$(_bundle_field "$raw_call" limit 2>/dev/null || echo "$l_limit")
       _local_quota_save "$s_used" "$s_limit"
-      log_msg "Autonomous Integrity API quota exhausted ($s_used/$s_limit); skipping further requests"
+      trace_msg "Дневной лимит API исчерпан ($s_used/$s_limit)"
       echo "RESULT_MODE=HEADLESS"
       echo "RESULT_VERDICT=QUOTA"
       echo "RESULT_LABELS=Дневной лимит API исчерпан ($s_used/$s_limit)"
@@ -526,7 +560,7 @@ _run_probe_once() {
       echo "RESULT_REMAINING=0"
       return 1
     fi
-    log_msg "Autonomous integrity probe failed: ${err:-$raw_call}"
+    trace_msg "Ошибка проверки Integrity: ${err:-$raw_call}"
     echo "RESULT_MODE=HEADLESS"
     echo "RESULT_VERDICT=ERROR"
     echo "RESULT_LABELS=${err:-Ошибка автономной системы проверки}"
@@ -553,7 +587,7 @@ _run_probe_once() {
 
   dev_now=$(read_pif_val DEVICE "$PIF_DIR/custom.pif.prop" 2>/dev/null || echo "-")
   sdk_now=$(read_pif_val DEVICE_INITIAL_SDK_INT "$PIF_DIR/custom.pif.prop" 2>/dev/null || echo "-")
-  log_msg "Autonomous Integrity check: verdict=$verdict profile=$dev_now(SDK $sdk_now) labels=[$labels] quota=${eff_used}/${eff_limit}"
+  trace_msg "Результат для $dev_now (SDK $sdk_now): $verdict [${labels:-пусто}] (лимит: ${eff_used}/${eff_limit})"
 
   echo "RESULT_MODE=HEADLESS"
   echo "RESULT_VERDICT=$verdict"
@@ -579,6 +613,10 @@ check_play_integrity() {
 
   am force-stop com.android.vending >/dev/null 2>&1 || true
   killall com.google.android.gms.unstable >/dev/null 2>&1 || true
+  reset_finsky_throttle
+
+  dev_now=$(read_pif_val DEVICE "$PIF_DIR/custom.pif.prop" 2>/dev/null || echo "-")
+  trace_msg "Проверяем фингерпринт $dev_now через автономную систему..."
 
   rc1=0
   out1=$(_run_probe_once "$ep" "$proj") || rc1=$?
@@ -588,18 +626,19 @@ check_play_integrity() {
     return "$rc1"
   fi
 
-  log_msg "Warm-up check returned $v1; waiting 3s and re-checking..."
+  trace_msg "Прогрев GMS ($v1) — пауза 3с и контрольная проверка..."
   sleep 3
   _run_probe_once "$ep" "$proj"
 }
 
 verify_and_autofix_fingerprint() {
-  log_msg "Starting headless Play Integrity check & automatic fingerprint selection..."
-  inj_state=$(grep -m1 '^enabled =' "$OMK_INJ" 2>/dev/null | awk '{print $3}')
+  trace_msg "Запуск проверки Integrity и автоподбора фингерпринта..."
+  inj_state=$(toml_get_in_section "$OMK_INJ" main enabled 2>/dev/null || echo "true")
 
   cur_out=$(check_play_integrity) || true
   cur_v=$(printf '%s\n' "$cur_out" | sed -n 's/^RESULT_VERDICT=//p' | head -n 1)
   if [ "$cur_v" = "STRONG" ] || [ "$cur_v" = "DEVICE" ] || { [ "$inj_state" = "false" ] && [ "$cur_v" = "BASIC" ]; }; then
+    trace_msg "Фингерпринт прошёл проверку ($cur_v)!"
     printf '%s\n' "$cur_out"
     return 0
   fi
@@ -622,6 +661,8 @@ verify_and_autofix_fingerprint() {
   last_row="$best_row"
 
   cand_list=$(get_profile_candidates)
+  total_cand=$(printf '%s\n' "$cand_list" | grep -c '|' || echo 5)
+  try_idx=0
   old_ifs="$IFS"
   IFS='
 '
@@ -636,7 +677,8 @@ verify_and_autofix_fingerprint() {
 '
       continue
     fi
-    log_msg "Rotating fingerprint candidate: $m ($d, SDK $s)..."
+    try_idx=$((try_idx + 1))
+    trace_msg "Попытка перебора $try_idx/$total_cand: $m ($d, SDK $s)..."
     apply_pif_profile "$d" "$p" "$m" "$s" || { IFS='
 '; continue; }
     last_row="$row"
@@ -645,8 +687,13 @@ verify_and_autofix_fingerprint() {
     out=$(check_play_integrity) || true
     v=$(printf '%s\n' "$out" | sed -n 's/^RESULT_VERDICT=//p' | head -n 1)
     if [ "$v" = "STRONG" ] || [ "$v" = "DEVICE" ]; then
+      trace_msg "Подобран рабочий профиль: $m ($d) → $v!"
       printf '%s\n' "$out"
       return 0
+    fi
+    if [ "$v" = "QUOTA" ] || [ "$v" = "ERROR" ]; then
+      best_out="$out"
+      break
     fi
     rank=0
     case "$v" in
@@ -689,13 +736,13 @@ run_pif() {
   fi
   MATCHFLAG=-m
   [ -f "$PIF_DIR/skipmatchdevice" ] && MATCHFLAG=""
-  log_msg "Running PlayIntegrityFork autopif4.sh $MATCHFLAG..."
+  trace_msg "Загружаем свежий профиль Android Canary (autopif4)..."
   if sh "$PIF_DIR/autopif4.sh" $MATCHFLAG >>"$LOG_FILE" 2>&1; then
-    log_msg "PlayIntegrityFork updated custom.pif.prop"
+    trace_msg "Canary-профиль успешно обновлён, подбираем устройство под SDK..."
     force_tangorpro_canary
     return 0
   else
-    log_msg "WARN: autopif4.sh failed (offline or blocked), keeping existing custom.pif.prop"
+    trace_msg "Не удалось скачать новый Canary — используем текущий профиль"
     return 1
   fi
 }
@@ -941,6 +988,7 @@ fetch_specter_keybox() {
     src=$(printf '%s' "$line" | cut -d'|' -f2)
     ver=$(printf '%s' "$line" | cut -d'|' -f3)
     log_msg "Trying Specter candidate: $src/$ver..."
+    trace_msg "Проверяем keybox Specter ($src/$ver) по X.509 и базе отзывов Google CRL..."
     rm -f "$raw_blob" "$dec_blob" "$out_xml"
     if ! download_url "${SPECTER_KEY_PRIMARY}/${src}/${ver}" > "$raw_blob" 2>/dev/null || [ ! -s "$raw_blob" ]; then
       download_url "${SPECTER_KEY_FALLBACK}/${src}/${ver}" > "$raw_blob" 2>/dev/null || true
@@ -951,7 +999,7 @@ fetch_specter_keybox() {
     base64 -d < "$dec_blob" > "$out_xml" 2>/dev/null || true
     rm -f "$raw_blob" "$dec_blob"
     if validate_keybox_file "$out_xml"; then
-      log_msg "Specter ($src/$ver) passed X.509 + Google CRL validation!"
+      trace_msg "Keybox Specter ($src/$ver) живой и прошёл проверку CRL!"
       return 0
     fi
     IFS='
@@ -964,7 +1012,7 @@ fetch_specter_keybox() {
 
 fetch_meowdump_keybox() {
   out_xml=$1
-  log_msg "Trying MeowDump provider..."
+  trace_msg "Проверяем keybox MeowDump и сверяем с базой отзывов Google CRL..."
   cur="/data/local/tmp/omk_md_0.$$"
   if ! download_url "$MEOWDUMP_URL" > "$cur" 2>/dev/null || [ ! -s "$cur" ]; then
     rm -f "$cur"
@@ -995,7 +1043,7 @@ fetch_meowdump_keybox() {
   tr 'A-Za-z' 'N-ZA-Mn-za-m' < "$hex_out" > "$out_xml" 2>/dev/null || { rm -f "$hex_out" "$out_xml"; return 1; }
   rm -f "$hex_out"
   if validate_keybox_file "$out_xml"; then
-    log_msg "MeowDump passed X.509 + Google CRL validation!"
+    trace_msg "Keybox MeowDump живой и прошёл проверку CRL!"
     return 0
   fi
   rm -f "$out_xml"
@@ -1004,7 +1052,7 @@ fetch_meowdump_keybox() {
 
 fetch_yurikey_keybox() {
   out_xml=$1
-  log_msg "Trying Yurikey provider..."
+  trace_msg "Проверяем keybox Yurikey и сверяем с базой отзывов Google CRL..."
   raw="/data/local/tmp/omk_yk.$$"
   if ! download_url "$YURIKEY_URL" > "$raw" 2>/dev/null || [ ! -s "$raw" ]; then
     rm -f "$raw"
@@ -1013,7 +1061,7 @@ fetch_yurikey_keybox() {
   base64 -d < "$raw" > "$out_xml" 2>/dev/null || cp -f "$raw" "$out_xml"
   rm -f "$raw"
   if validate_keybox_file "$out_xml"; then
-    log_msg "Yurikey passed X.509 + Google CRL validation!"
+    trace_msg "Keybox Yurikey живой и прошёл проверку CRL!"
     return 0
   fi
   rm -f "$out_xml"
@@ -1067,6 +1115,7 @@ update_keybox() {
   dec_file="/data/local/tmp/omk_keybox_new.xml.$$"
 
   refresh_crl_cache 1 || true
+  trace_msg "Скачиваем и проверяем keybox по провайдерам ($provider)..."
 
   fetched=0
   case "$provider" in
@@ -1091,7 +1140,7 @@ update_keybox() {
   fi
 
   rm -f "$dec_file"
-  log_msg "WARN: All keybox providers ($provider) returned revoked/expired or unreachable keyboxes"
+  trace_msg "Все публичные keybox сейчас отозваны или недоступны"
   return 1
 }
 
@@ -1235,7 +1284,7 @@ sync_omk_config() {
   chown 1017:1017 "$OMK_CFG"
   chmod 0660 "$OMK_CFG"
   ensure_injector_scoop
-  log_msg "Synced OMK: brand=$BRAND device=$DEVICE model=$MODEL product=$PRODUCT patch=$SECURITY_PATCH vb_hash=$VB_HASH"
+  trace_msg "Синхронизирован Oh My KeyMint: $DEVICE (патч $SECURITY_PATCH)"
   return 0
 }
 

@@ -11,6 +11,7 @@
     <div class="yt-spinner"></div>
     <p class="loading-title" id="loadingTitle">Выполняется...</p>
     <p class="loading-sub" id="loadingSub">Пожалуйста, подождите</p>
+    <pre id="loadingTrace" class="loading-trace hidden"></pre>
   </div>
 
   <!-- Full-screen SweetAlert2-style Neon Result Overlay -->
@@ -42,7 +43,7 @@
       </div>
       <div class="header-actions">
         <div class="mode-switch" role="tablist" aria-label="Режим интерфейса">
-          <button class="mode-btn active" id="modeBasicBtn" data-mode="basic">Basic</button>
+          <button class="mode-btn active" id="modeAutoBtn" data-mode="auto">AUTO</button>
           <button class="mode-btn" id="modeProBtn" data-mode="pro">PRO</button>
         </div>
         <button class="btn btn-secondary" id="btnReload" title="Перечитать статус">Обновить</button>
@@ -61,29 +62,16 @@
       <div class="expiry-note" id="metaNote">Загрузка...</div>
     </section>
 
-    <!-- BASIC MODE -->
-    <section id="basicPanel" class="card basic-hero">
+    <!-- AUTO MODE -->
+    <section id="autoPanel" class="card auto-hero">
       <h2>Автоматическая настройка Play Integrity</h2>
       <p>
-        Использует <strong>собственную автономную систему проверки Integrity</strong> полностью в фоне (без запуска Play Store),
-        подбирает Pixel Canary под версию Android (A13–A17+), ищет живой keybox по всем провайдерам (<strong>Specter/TAKR</strong>, <strong>MeowDump</strong>, <strong>Yurikey</strong>) с проверкой Google CRL и автоматически включает режим <strong>BASIC</strong>, если все keybox отозваны.
+        Один клик запускает полный цикл: обновление Canary, поиск живого keybox с проверкой Google CRL,
+        автономную проверку Play Integrity с подбором фингерпринта (A13–A17+) и автоматический откат на BASIC при необходимости.
       </p>
-      <button class="btn btn-primary btn-hero" id="btnBasicFix">
-        Исправить Play Integrity (Full Sync)
+      <button class="btn btn-primary btn-hero" id="btnAutoRun">
+        Включить Play Integrity (AUTO)
       </button>
-      <div class="basic-subactions">
-        <button class="btn btn-accent" id="btnBasicVerifyPi">Проверить Integrity + Автоподбор</button>
-        <button class="btn btn-chip" id="btnBasicCheckCrl">Проверить Keybox (CRL)</button>
-        <button class="btn btn-chip" id="btnBasicQuota">Запас проверок</button>
-        <button class="btn btn-chip" id="btnBasicFallback">Режим только BASIC (без keybox)</button>
-        <button class="btn btn-chip" id="btnToggleKeyboxBox">Вставить свой keybox.xml</button>
-      </div>
-      <div id="customKeyboxBox" class="hidden" style="width:100%; text-align:left; margin-top:8px;">
-        <textarea id="keyboxXmlInput" class="raw-textarea" style="min-height:140px;" placeholder="Вставьте содержимое <AndroidAttestation>...</AndroidAttestation> сюда"></textarea>
-        <div class="actions-row">
-          <button class="btn btn-accent" id="btnSaveCustomKeybox">Сохранить свой keybox.xml + Sync</button>
-        </div>
-      </div>
     </section>
 
     <!-- PRO MODE -->
@@ -156,12 +144,21 @@
           <button class="btn btn-accent" id="btnOmkSync">Full Sync (action.sh)</button>
           <button class="btn btn-primary" id="btnProCheckPi">Проверить Integrity</button>
           <button class="btn btn-accent" id="btnProAutoPick">Автоподбор фингерпринта</button>
+          <button class="btn btn-secondary" id="btnProQuota">Запас проверок</button>
           <button class="btn btn-accent" id="btnSyncLocal">Синхр. PIF → OMK</button>
           <button class="btn btn-secondary" id="btnAutopif">autopif4 (-m)</button>
           <button class="btn btn-warn" id="btnKillPi">Kill GMS / Vending</button>
-          <button class="btn btn-secondary" id="btnCheckCrlPro">Проверить Keybox</button>
+          <button class="btn btn-secondary" id="btnCheckCrlPro">Проверить Keybox (CRL)</button>
+          <button class="btn btn-secondary" id="btnProFallback">Режим только BASIC (без keybox)</button>
+          <button class="btn btn-secondary" id="btnToggleKeyboxBox">Вставить свой keybox.xml</button>
           <button class="btn btn-secondary" id="btnReadSyncLog">Лог Sync</button>
           <button class="btn btn-secondary" id="btnRestoreBak">Восстановить .bak</button>
+        </div>
+        <div id="customKeyboxBox" class="hidden" style="width:100%; text-align:left; margin-top:10px;">
+          <textarea id="keyboxXmlInput" class="raw-textarea" style="min-height:140px;" placeholder="Вставьте содержимое <AndroidAttestation>...</AndroidAttestation> сюда"></textarea>
+          <div class="actions-row">
+            <button class="btn btn-accent" id="btnSaveCustomKeybox">Сохранить свой keybox.xml + Sync</button>
+          </div>
         </div>
       </section>
 

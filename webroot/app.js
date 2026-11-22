@@ -12,6 +12,7 @@
   const CUSTOM_URL_CFG = '/data/adb/omk_pif_sync_keybox_url';
   const QUOTA_FILE = '/data/adb/omk_probe_quota.dat';
   const SYNC_LOG = '/data/local/tmp/omk_pif_sync.log';
+  const LIVE_TRACE = '/data/local/tmp/omk_live_trace.log';
   const MODE_KEY = 'omk_pif_suite_mode';
 
   const BUILD_KEYS = [
@@ -111,10 +112,15 @@
     resultTimerId = setTimeout(hideResultOverlay, durationMs);
   }
 
-  function showLoading(title, sub = 'Пожалуйста, подождите...') {
+  function showLoading(title, sub = 'Пожалуйста, подождите...', withTrace = false) {
     busyDepth++;
     document.getElementById('loadingTitle').textContent = title || 'Выполняется...';
     document.getElementById('loadingSub').textContent = sub;
+    const traceEl = document.getElementById('loadingTrace');
+    if (traceEl) {
+      traceEl.textContent = withTrace ? 'Инициализация...' : '';
+      traceEl.classList.toggle('hidden', !withTrace);
+    }
     document.getElementById('loadingOverlay').classList.remove('hidden');
     document.body.classList.add('modal-open');
   }
@@ -123,8 +129,21 @@
     busyDepth = Math.max(0, busyDepth - 1);
     if (busyDepth === 0) {
       document.getElementById('loadingOverlay').classList.add('hidden');
+      const traceEl = document.getElementById('loadingTrace');
+      if (traceEl) {
+        traceEl.classList.add('hidden');
+        traceEl.textContent = '';
+      }
       document.body.classList.remove('modal-open');
     }
+  }
+
+  function updateLoadingTrace(text) {
+    const el = document.getElementById('loadingTrace');
+    if (!el) return;
+    el.classList.remove('hidden');
+    el.textContent = text || 'Выполняется...';
+    el.scrollTop = el.scrollHeight;
   }
 
   function nextPaint() {
@@ -380,10 +399,10 @@
 
   function setMode(mode) {
     const isPro = mode === 'pro';
-    localStorage.setItem(MODE_KEY, isPro ? 'pro' : 'basic');
-    document.getElementById('modeBasicBtn').classList.toggle('active', !isPro);
+    localStorage.setItem(MODE_KEY, isPro ? 'pro' : 'auto');
+    document.getElementById('modeAutoBtn').classList.toggle('active', !isPro);
     document.getElementById('modeProBtn').classList.toggle('active', isPro);
-    document.getElementById('basicPanel').classList.toggle('hidden', isPro);
+    document.getElementById('autoPanel').classList.toggle('hidden', isPro);
     document.getElementById('proPanel').classList.toggle('hidden', !isPro);
     document.getElementById('btnSave').classList.toggle('hidden', !isPro);
   }
@@ -706,51 +725,160 @@
     }
   }
 
+  function sleep(ms) {
+    return new Promise(r => setTimeout(r, ms));
+  }
+
+  async function runDetachedWithTrace(title, sub, shellCmd) {
+    showLoading(title, sub, true);
+    await nextPaint();
+    const id = `${Date.now()}_${++cbCounter}`;
+    const outFile = `/data/local/tmp/omk_bg_${id}.out`;
+    const rcFile = `/data/local/tmp/omk_bg_${id}.rc`;
+    const runFile = `/data/local/tmp/omk_bg_${id}.sh`;
+    const b64Cmd = toBase64Utf8(shellCmd);
+
+    try {
+      await execRoot(
+        `: > "${LIVE_TRACE}" && rm -f "${outFile}" "${rcFile}" && ` +
+        `printf '%s' '${b64Cmd}' | base64 -d > "${runFile}" && chmod 0755 "${runFile}" && ` +
+        `sh -c 'sh "'"${runFile}"'" >"'"${outFile}"'" 2>&1; echo $? > "'"${rcFile}"'"' >/dev/null 2>&1 </dev/null &`
+      );
+
+      let exitCode = null;
+      let lastTrace = '';
+      for (let tick = 0; tick < 360; tick++) {
+        await sleep(450);
+        const poll = await execRoot(
+          `if [ -f "${rcFile}" ]; then echo "__OMK_DONE__=$(cat "${rcFile}")"; fi\n` +
+          `echo "__OMK_TRACE__"\n` +
+          `tail -n 14 "${LIVE_TRACE}" 2>/dev/null || true`
+        );
+        const text = poll.stdout || '';
+        const marker = text.indexOf('__OMK_TRACE__');
+        const head = marker >= 0 ? text.slice(0, marker) : '';
+        const tracePart = marker >= 0 ? text.slice(marker + 13).trim() : '';
+        if (tracePart && tracePart !== lastTrace) {
+          lastTrace = tracePart;
+          updateLoadingTrace(tracePart);
+        }
+        const m = /__OMK_DONE__=(-?\d+)/.exec(head);
+        if (m) {
+          exitCode = Number(m[1]);
+          break;
+        }
+      }
+
+      const outRes = await execRoot(`cat "${outFile}" 2>/dev/null || true; rm -f "${outFile}" "${rcFile}" "${runFile}"`);
+      if (exitCode === null) {
+        return { code: 124, stdout: outRes.stdout || '', stderr: 'Таймаут ожидания операции' };
+      }
+      return { code: exitCode, stdout: outRes.stdout || '', stderr: '' };
+    } finally {
+      hideLoading();
+    }
+  }
+
   async function runPlayStoreVerify(autoFix) {
     let overlay = null;
     const title = autoFix ? 'Проверка и автоподбор фингерпринта' : 'Проверка Play Integrity';
     const sub = autoFix
-      ? 'Автономная фоновая проверка Integrity (при неудаче — автоподбор Pixel профиля)...'
-      : 'Запрос к собственной автономной системе проверки Integrity...';
-    await withLoading(title, sub, async () => {
-      log(`Запуск: ${title}...`);
-      try {
-        const fn = autoFix ? 'verify_and_autofix_fingerprint' : 'check_play_integrity';
-        const res = await execRoot(`. "${SUITE_DIR}/common.sh" && ${fn}`);
-        const out = (res.stdout + '\n' + res.stderr).trim();
-        log(out);
+      ? 'Автономная проверка (при неудаче — автоподбор профиля)'
+      : 'Запрос к автономной системе проверки Integrity';
+    log(`Запуск: ${title}...`);
+    try {
+      const fn = autoFix ? 'verify_and_autofix_fingerprint' : 'check_play_integrity';
+      const cmd = `. "${SUITE_DIR}/common.sh" && reset_trace && ${fn}`;
+      const res = await runDetachedWithTrace(title, sub, cmd);
+      const out = (res.stdout + '\n' + res.stderr).trim();
+      if (out) log(out);
 
-        const map = {};
-        out.split('\n').forEach(l => {
-          const idx = l.indexOf('=');
-          if (idx > 0 && l.startsWith('RESULT_')) map[l.slice(0, idx)] = l.slice(idx + 1).trim();
-        });
-        const v = map.RESULT_VERDICT || 'ERROR';
-        const prof = map.RESULT_PROFILE || state.build.DEVICE || '-';
-        const labels = map.RESULT_LABELS || '';
-        const passed = v === 'STRONG' || v === 'DEVICE';
+      const map = {};
+      out.split('\n').forEach(l => {
+        const idx = l.indexOf('=');
+        if (idx > 0 && l.startsWith('RESULT_')) map[l.slice(0, idx)] = l.slice(idx + 1).trim();
+      });
+      const v = map.RESULT_VERDICT || 'ERROR';
+      const prof = map.RESULT_PROFILE || state.build.DEVICE || '-';
+      const labels = map.RESULT_LABELS || '';
+      const passed = v === 'STRONG' || v === 'DEVICE';
 
-        if (map.RESULT_USED !== undefined) {
-          updateQuotaUi(map.RESULT_USED, map.RESULT_LIMIT, map.RESULT_REMAINING);
-        }
-
-        await loadConfig();
-        await loadStatus();
-
-        overlay = {
-          valid: passed,
-          title: v === 'STRONG'
-            ? 'MEETS_STRONG_INTEGRITY'
-            : (v === 'DEVICE'
-              ? 'MEETS_DEVICE_INTEGRITY'
-              : (v === 'QUOTA' ? 'Лимит проверок исчерпан' : `Play Integrity: ${v}`)),
-          subtitle: `Профиль: ${prof} • ${labels}`
-        };
-      } catch (e) {
-        log('Ошибка проверки Play Integrity: ' + e.message);
-        overlay = { valid: false, title: 'Ошибка проверки', subtitle: e.message };
+      if (map.RESULT_USED !== undefined) {
+        updateQuotaUi(map.RESULT_USED, map.RESULT_LIMIT, map.RESULT_REMAINING);
       }
-    });
+
+      await loadConfig();
+      await loadStatus();
+
+      overlay = {
+        valid: passed,
+        title: v === 'STRONG'
+          ? 'MEETS_STRONG_INTEGRITY'
+          : (v === 'DEVICE'
+            ? 'MEETS_DEVICE_INTEGRITY'
+            : (v === 'QUOTA' ? 'Лимит проверок исчерпан' : `Play Integrity: ${v}`)),
+        subtitle: `Профиль: ${prof} • ${labels}`
+      };
+    } catch (e) {
+      log('Ошибка проверки Play Integrity: ' + e.message);
+      overlay = { valid: false, title: 'Ошибка проверки', subtitle: e.message };
+    }
+    if (overlay) {
+      showResultOverlay(overlay.valid, overlay.title, overlay.subtitle, 3000);
+    }
+  }
+
+  async function runAutoFullCycle(isAutoBtn = true) {
+    let overlay = null;
+    const title = isAutoBtn ? 'AUTO-настройка Play Integrity' : 'Full Sync (action.sh)';
+    const sub = 'Живая трассировка шагов выполняется ниже...';
+    log(`Запуск: ${title}...`);
+    try {
+      const arg = isAutoBtn ? '--auto' : '';
+      const res = await runDetachedWithTrace(title, sub, `sh "${OMK_SYNC_ACT}" ${arg}`);
+      const out = (res.stdout + '\n' + res.stderr).trim();
+      if (out) log(out);
+
+      const map = {};
+      out.split('\n').forEach(l => {
+        const idx = l.indexOf('=');
+        if (idx > 0 && l.startsWith('RESULT_')) map[l.slice(0, idx)] = l.slice(idx + 1).trim();
+      });
+
+      if (map.RESULT_USED !== undefined) {
+        updateQuotaUi(map.RESULT_USED, map.RESULT_LIMIT, map.RESULT_REMAINING);
+      }
+
+      await loadConfig();
+      await loadStatus();
+
+      if (res.code !== 0) {
+        const tail = out ? out.split('\n').slice(-2).join(' • ') : `Код ошибки: ${res.code}`;
+        overlay = { valid: false, title: 'Ошибка настройки', subtitle: tail };
+      } else if (map.RESULT_FALLBACK === 'BASIC') {
+        overlay = {
+          valid: false,
+          title: 'Keybox отозваны → режим BASIC',
+          subtitle: `Включён безопасный режим без keybox (${map.RESULT_PROFILE || '-'})`
+        };
+      } else if (map.RESULT_VERDICT === 'STRONG' || map.RESULT_VERDICT === 'DEVICE') {
+        overlay = {
+          valid: true,
+          title: map.RESULT_VERDICT === 'STRONG' ? 'MEETS_STRONG_INTEGRITY' : 'MEETS_DEVICE_INTEGRITY',
+          subtitle: `Профиль: ${map.RESULT_PROFILE || '-'} • Keybox LIVE (${map.RESULT_LABELS || 'OK'})`
+        };
+      } else {
+        const crl = await checkKeyboxCrl({ silent: false, autoFallbackOnRevoked: false });
+        overlay = {
+          valid: crl.valid && map.RESULT_VERDICT !== 'NONE',
+          title: map.RESULT_VERDICT ? `Integrity: ${map.RESULT_VERDICT}` : crl.title,
+          subtitle: `${map.RESULT_PROFILE || ''} • ${crl.subtitle}`
+        };
+      }
+    } catch (e) {
+      log('Ошибка AUTO-настройки: ' + e.message);
+      overlay = { valid: false, title: 'Ошибка выполнения', subtitle: e.message };
+    }
     if (overlay) {
       showResultOverlay(overlay.valid, overlay.title, overlay.subtitle, 3000);
     }
@@ -758,7 +886,7 @@
 
   function initEvents() {
     document.getElementById('resultOverlay').addEventListener('click', hideResultOverlay);
-    document.getElementById('modeBasicBtn').addEventListener('click', () => setMode('basic'));
+    document.getElementById('modeAutoBtn').addEventListener('click', () => setMode('auto'));
     document.getElementById('modeProBtn').addEventListener('click', () => setMode('pro'));
 
     document.querySelectorAll('.tab').forEach(btn => {
@@ -789,7 +917,7 @@
       toast('URL провайдера сохранён');
     });
 
-    document.getElementById('btnBasicQuota').addEventListener('click', () => {
+    document.getElementById('btnProQuota').addEventListener('click', () => {
       withLoading('Запрос запаса проверок', 'Сверяем дневной счётчик автономной системы...', () => refreshQuota(true));
     });
 
@@ -857,21 +985,11 @@
       syncRawPreview();
     });
 
-    // Basic mode actions
-    document.getElementById('btnBasicFix').addEventListener('click', () => {
-      const cmd = `sh "${OMK_SYNC_ACT}" --basic`;
-      runAction(
-        'Basic Full Sync',
-        'Обновляем Canary (под Android SDK устройства), ищем живой keybox и синхронизируем OMK...',
-        cmd,
-        { reloadAfter: true, checkCrl: true, autoFallbackOnRevoked: true, showOverlay: true }
-      );
-    });
+    // AUTO mode single full-cycle button
+    document.getElementById('btnAutoRun').addEventListener('click', () => runAutoFullCycle(true));
 
-    document.getElementById('btnBasicVerifyPi').addEventListener('click', () => runPlayStoreVerify(true));
-    document.getElementById('btnBasicCheckCrl').addEventListener('click', runCrlCheckWithOverlay);
-
-    document.getElementById('btnBasicFallback').addEventListener('click', () => {
+    // PRO mode actions
+    document.getElementById('btnProFallback').addEventListener('click', () => {
       const cmd = `. "${SUITE_DIR}/common.sh" && enable_basic_fallback`;
       runAction(
         'Переключение в режим BASIC',
@@ -908,15 +1026,7 @@
       );
     });
 
-    // PRO mode actions
-    document.getElementById('btnOmkSync').addEventListener('click', () => {
-      runAction(
-        'Full Sync (action.sh)',
-        'Запуск autopif4, каскада keybox и синхронизации OMK...',
-        `sh "${OMK_SYNC_ACT}"`,
-        { reloadAfter: true, checkCrl: true, autoFallbackOnRevoked: true, showOverlay: true }
-      );
-    });
+    document.getElementById('btnOmkSync').addEventListener('click', () => runAutoFullCycle(false));
     document.getElementById('btnProCheckPi').addEventListener('click', () => runPlayStoreVerify(false));
     document.getElementById('btnProAutoPick').addEventListener('click', () => runPlayStoreVerify(true));
     document.getElementById('btnSyncLocal').addEventListener('click', () => {
@@ -955,7 +1065,8 @@
     try {
       if (window.ksu && typeof window.ksu.enableEdgeToEdge === 'function') window.ksu.enableEdgeToEdge(true);
     } catch (_) {}
-    setMode(localStorage.getItem(MODE_KEY) || 'basic');
+    const savedMode = localStorage.getItem(MODE_KEY);
+    setMode(savedMode === 'pro' ? 'pro' : 'auto');
     initEvents();
     loadConfig().then(() => loadStatus());
   });

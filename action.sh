@@ -2,13 +2,17 @@
 MODPATH="${0%/*}"
 . "$MODPATH/common.sh"
 
-BASIC_MODE=0
-[ "${1:-}" = "--basic" ] && BASIC_MODE=1
+AUTO_MODE=0
+case "${1:-}" in
+  --auto|--basic) AUTO_MODE=1 ;;
+esac
 
 : > "$LOG_FILE"
+reset_trace
+trace_msg "Сбрасываем кеш и лимиты Play Store..."
 cleanup_google
 run_pif
-if [ "$BASIC_MODE" = "1" ]; then
+if [ "$AUTO_MODE" = "1" ]; then
   force_tangorpro_canary
   force_basic_settings
   FORCE_KEYBOX=1 update_keybox
@@ -26,19 +30,25 @@ if [ "$kb_ok" -ne 0 ]; then
   v_rc=$?
   if [ "$v_rc" -eq 1 ]; then
     enable_basic_fallback || exit 1
-    log_msg "Action complete (basic=$BASIC_MODE, fallback=BASIC)"
+    trace_msg "Включён режим только BASIC (все публичные keybox отозваны)"
+    echo "RESULT_FALLBACK=BASIC"
+    verify_and_autofix_fingerprint || true
+    log_msg "Action complete (auto=$AUTO_MODE, fallback=BASIC)"
   else
-    set_omk_injector_enabled true || { reload_omk; log_msg "ERROR: OMK injector filter unsafe"; exit 1; }
+    set_omk_injector_enabled true || { reload_omk; trace_msg "ОШИБКА: небезопасный фильтр OMK"; exit 1; }
     set_pif_prop spoofProvider 0
     reload_omk
     cleanup_google
-    log_msg "Action complete (basic=$BASIC_MODE, keybox=KEPT_OFFLINE)"
+    trace_msg "Сохранён локальный keybox (CRL недоступен офлайн)"
+    echo "RESULT_FALLBACK=NONE"
+    log_msg "Action complete (auto=$AUTO_MODE, keybox=KEPT_OFFLINE)"
   fi
 else
-  set_omk_injector_enabled true || { reload_omk; log_msg "ERROR: OMK injector filter unsafe"; exit 1; }
+  set_omk_injector_enabled true || { reload_omk; trace_msg "ОШИБКА: небезопасный фильтр OMK"; exit 1; }
   set_pif_prop spoofProvider 0
   reload_omk
   cleanup_google
-  verify_and_autofix_fingerprint >>"$LOG_FILE" 2>&1 || true
-  log_msg "Action complete (basic=$BASIC_MODE, keybox=VALID)"
+  echo "RESULT_FALLBACK=NONE"
+  verify_and_autofix_fingerprint || true
+  log_msg "Action complete (auto=$AUTO_MODE, keybox=VALID)"
 fi

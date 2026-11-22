@@ -1,6 +1,7 @@
 id=omk_pif_suite
 name=OMK PIF Suite
-version=v1.7.0
-versionCode=170
+version=v1.8.0
+versionCode=180
 author=SuspectWorkers
-description=All-in-one Play Integrity manager & WebUI (Basic & PRO modes): proprietary autonomous integrity verification system (zero UI automation), SDK-aware Pixel Canary selection (A13-A17+), OMK filter safety guard & clean uninstall, multi-provider keybox cascade, and Google CRL check.
+description=All-in-one Play Integrity manager & WebUI (AUTO & PRO modes): one-tap autonomous integrity check & fingerprint auto-selection, live progress trace, Play Store -8 throttle bypass, OMK filter guard & clean uninstall, and multi-provider keybox CRL cascade.
+updateJson=https://raw.githubusercontent.com/SuspectWorkers/omk-pif-suite/main/update.json
