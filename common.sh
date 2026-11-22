@@ -11,6 +11,13 @@ TS_DIR=/data/adb/tricky_store
 
 PROVIDER_CFG=/data/adb/omk_pif_sync_provider
 CUSTOM_URL_CFG=/data/adb/omk_pif_sync_keybox_url
+PROBE_EP_CFG=/data/adb/omk_pif_sync_probe_endpoint
+PROBE_SEC_CFG=/data/adb/omk_pif_sync_probe_secret
+PROJECT_NUM_CFG=/data/adb/omk_pif_sync_project_number
+QUOTA_FILE=/data/adb/omk_probe_quota.dat
+STATE_DB=/data/adb/omk_pif_suite_state.db
+PROBE_PKG=com.omk.integrityprobe
+PROBE_APK_MOD=/data/adb/modules/omk_pif_suite/probe/OMKIntegrityProbe.apk
 CRL_URL="https://android.googleapis.com/attestation/status"
 CRL_CACHE=/data/local/tmp/omk_crl_cache.json
 
@@ -96,28 +103,151 @@ force_basic_settings() {
   log_msg "Applied Basic settings (spoofBuild=1, spoofProps=1, spoofVendingFinger=1)"
 }
 
-set_omk_injector_enabled() {
-  state=$1 # true or false
-  [ -f "$OMK_INJ" ] || return 0
-  tmp="${OMK_INJ}.tmp.$$"
-  awk -v st="$state" '
-    BEGIN { in_main=0 }
-    /^\[.*\]/ { in_main = ($0 == "[main]"); print; next }
+toml_get_in_section() {
+  file=$1
+  section=$2
+  key=$3
+  [ -f "$file" ] || return 1
+  awk -v sec="[$section]" -v k="$key" '
+    BEGIN { in_sec=(sec=="[]" ? 1 : 0); found=0 }
+    /^[[:space:]]*\[.*\][[:space:]]*$/ {
+      cur=$0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", cur)
+      in_sec = (cur == sec)
+      next
+    }
+    {
+      if (in_sec && $0 ~ ("^[[:space:]]*" k "[[:space:]]*=")) {
+        val=$0
+        sub(/^[^=]*=[[:space:]]*/, "", val)
+        sub(/[[:space:]]*#.*$/, "", val)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", val)
+        gsub(/^"|"$/, "", val)
+        print val
+        found=1
+        exit
+      }
+    }
+    END { if (!found) exit 1 }
+  ' "$file"
+}
+
+toml_verify_injector_safe() {
+  inj_file=$1
+  [ -f "$inj_file" ] && [ -r "$inj_file" ] || { log_msg "ERROR: $inj_file missing or unreadable"; return 1; }
+  grep -q '^[[:space:]]*\[main\][[:space:]]*$' "$inj_file" 2>/dev/null || { log_msg "ERROR: $inj_file missing [main] section"; return 1; }
+  grep -q '^[[:space:]]*\[filter\][[:space:]]*$' "$inj_file" 2>/dev/null || { log_msg "ERROR: $inj_file missing [filter] section"; return 1; }
+
+  f_enabled=$(toml_get_in_section "$inj_file" filter enabled 2>/dev/null || echo "")
+  f_block_android=$(toml_get_in_section "$inj_file" filter block_android_package 2>/dev/null || echo "")
+  if [ "$f_enabled" != "true" ] || [ "$f_block_android" != "true" ]; then
+    log_msg "SECURITY BLOCK: Unsafe [filter] in $inj_file (enabled='$f_enabled', block_android_package='$f_block_android')"
+    return 1
+  fi
+  return 0
+}
+
+atomic_replace_omk_file() {
+  target_file=$1
+  staging_file=$2
+  default_mode=${3:-0600}
+  [ -s "$staging_file" ] || { rm -f "$staging_file"; return 1; }
+
+  if [ -e "$target_file" ]; then
+    ug=$(stat -c '%u:%g' "$target_file" 2>/dev/null || echo "1017:1017")
+    md=$(stat -c '%a' "$target_file" 2>/dev/null || echo "$default_mode")
+    chown "$ug" "$staging_file" 2>/dev/null || chown 1017:1017 "$staging_file" 2>/dev/null || true
+    chmod "$md" "$staging_file" 2>/dev/null || chmod "$default_mode" "$staging_file" 2>/dev/null || true
+    chcon --reference="$target_file" "$staging_file" 2>/dev/null || restorecon "$staging_file" 2>/dev/null || true
+  else
+    chown 1017:1017 "$staging_file" 2>/dev/null || true
+    chmod "$default_mode" "$staging_file" 2>/dev/null || true
+    restorecon "$staging_file" 2>/dev/null || true
+  fi
+  mv -f "$staging_file" "$target_file"
+}
+
+record_omk_state() {
+  s_file=$1; s_sec=$2; s_key=$3; s_orig=$4; s_written=$5
+  mkdir -p /data/adb 2>/dev/null || true
+  touch "$STATE_DB" 2>/dev/null || return 0
+  tmp_db="${STATE_DB}.tmp.$$"
+  awk -F'|' -v f="$s_file" -v s="$s_sec" -v k="$s_key" -v o="$s_orig" -v w="$s_written" '
+    BEGIN { OFS="|"; found=0 }
+    $1==f && $2==s && $3==k { print f, s, k, $4, w; found=1; next }
+    NF>=5 { print }
+    END { if (!found) print f, s, k, o, w }
+  ' "$STATE_DB" > "$tmp_db" && mv -f "$tmp_db" "$STATE_DB"
+  chmod 0600 "$STATE_DB" 2>/dev/null || true
+}
+
+_write_injector_main_enabled() {
+  inj_file=$1
+  new_state=$2
+  dir=${inj_file%/*}
+  base=${inj_file##*/}
+  tmp="${dir}/.${base}.tmp.$$"
+  awk -v st="$new_state" '
+    BEGIN { in_main=0; done=0 }
+    /^[[:space:]]*\[.*\][[:space:]]*$/ {
+      if (in_main && !done) { print "enabled = " st; done=1 }
+      cur=$0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", cur)
+      in_main = (cur == "[main]")
+      print
+      next
+    }
     {
       if (in_main && $0 ~ /^[[:space:]]*enabled[[:space:]]*=/) {
         print "enabled = " st
+        done=1
         next
       }
       print
     }
-  ' "$OMK_INJ" > "$tmp" && mv "$tmp" "$OMK_INJ"
-  chown 1017:1017 "$OMK_INJ"
-  chmod 0600 "$OMK_INJ"
+    END {
+      if (in_main && !done) print "enabled = " st
+    }
+  ' "$inj_file" > "$tmp" || { rm -f "$tmp"; return 1; }
+
+  actual_main=$(toml_get_in_section "$tmp" main enabled 2>/dev/null || echo "")
+  if [ "$actual_main" != "$new_state" ]; then
+    rm -f "$tmp"
+    log_msg "ERROR: Failed to verify staged [main].enabled=$new_state in $inj_file"
+    return 1
+  fi
+  if [ "$new_state" = "true" ] && ! toml_verify_injector_safe "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  atomic_replace_omk_file "$inj_file" "$tmp" 0600
+}
+
+set_omk_injector_enabled() {
+  state=$1 # true or false
+  if [ ! -f "$OMK_INJ" ] || [ ! -r "$OMK_INJ" ]; then
+    log_msg "ERROR: $OMK_INJ missing or unreadable"
+    return 1
+  fi
+  grep -q '^[[:space:]]*\[main\][[:space:]]*$' "$OMK_INJ" 2>/dev/null || { log_msg "ERROR: $OMK_INJ unparseable (missing [main])"; return 1; }
+  grep -q '^[[:space:]]*\[filter\][[:space:]]*$' "$OMK_INJ" 2>/dev/null || { log_msg "ERROR: $OMK_INJ unparseable (missing [filter])"; return 1; }
+
+  orig_val=$(toml_get_in_section "$OMK_INJ" main enabled 2>/dev/null || echo "<ABSENT>")
+  if [ "$state" = "true" ]; then
+    if ! toml_verify_injector_safe "$OMK_INJ"; then
+      _write_injector_main_enabled "$OMK_INJ" false >/dev/null 2>&1 || true
+      record_omk_state "$OMK_INJ" main enabled "$orig_val" false
+      log_msg "ERROR: Refused to enable [main].enabled=true due to unsafe [filter]; forced [main].enabled=false"
+      return 1
+    fi
+  fi
+
+  _write_injector_main_enabled "$OMK_INJ" "$state" || return 1
+  record_omk_state "$OMK_INJ" main enabled "$orig_val" "$state"
+  return 0
 }
 
 enable_basic_fallback() {
   log_msg "Switching to BASIC-only fallback (no keybox, OMK injector off, spoofProvider=1)..."
-  set_omk_injector_enabled false
+  set_omk_injector_enabled false || return 1
   force_tangorpro_canary
   set_pif_prop spoofBuild 1
   set_pif_prop spoofProps 1
@@ -217,8 +347,8 @@ apply_pif_profile() {
 
   live_pair=$(fetch_canary_for_product "$prod" 2>/dev/null || true)
   if [ -n "$live_pair" ]; then
-    BID=${live_pair%|*}
-    INC=${live_pair#*|}
+    BID=${live_pair%%"|"*}
+    INC=${live_pair#*"|"}
   fi
   [ -n "$BID" ] && [ -n "$INC" ] || return 1
 
@@ -260,126 +390,222 @@ force_tangorpro_canary() {
   select_compatible_canary
 }
 
-ensure_play_developer_mode() {
-  pref="/data/data/com.android.vending/shared_prefs/vending_preferences.xml"
-  [ -f "$pref" ] || return 0
-  if grep -q 'name="developer_settings" value="true"' "$pref" 2>/dev/null; then
-    return 0
+ensure_probe_installed() {
+  pm path "$PROBE_PKG" >/dev/null 2>&1 && return 0
+  if [ -f "$PROBE_APK_MOD" ]; then
+    log_msg "Installing headless probe APK ($PROBE_PKG)..."
+    pm install -r -d "$PROBE_APK_MOD" >/dev/null 2>&1 || return 1
+    pm path "$PROBE_PKG" >/dev/null 2>&1 && return 0
   fi
-  am force-stop com.android.vending >/dev/null 2>&1 || true
-  uid_gid=$(stat -c '%u:%g' "$pref" 2>/dev/null || echo "")
-  if grep -q 'name="developer_settings"' "$pref" 2>/dev/null; then
-    sed -i 's/name="developer_settings" value="false"/name="developer_settings" value="true"/' "$pref"
-  else
-    sed -i 's|</map>|    <boolean name="developer_settings" value="true" />\n</map>|' "$pref"
-  fi
-  [ -n "$uid_gid" ] && chown "$uid_gid" "$pref" 2>/dev/null || true
-  chmod 0660 "$pref" 2>/dev/null || true
-  log_msg "Enabled Play Store Developer options in vending_preferences.xml"
+  return 1
 }
 
-check_play_integrity() {
-  ensure_play_developer_mode
-  am force-stop com.android.vending >/dev/null 2>&1 || true
-  killall com.google.android.gms.unstable >/dev/null 2>&1 || true
-  sleep 1
+_bundle_field() {
+  raw_b=$1
+  key_b=$2
+  printf '%s' "$raw_b" | awk -v k="$key_b" '
+    {
+      s = $0
+      sub(/^.*Bundle\[\{/, "", s)
+      sub(/\}\][[:space:]]*$/, "", s)
+      pat = "(^|, )" k "="
+      if (!match(s, pat)) exit 1
+      rest = substr(s, RSTART + RLENGTH)
+      if (match(rest, /, [a-zA-Z0-9_]+=/)) {
+        print substr(rest, 1, RSTART - 1)
+      } else {
+        print rest
+      }
+    }
+  '
+}
 
-  sz=$(wm size 2>/dev/null | tail -n 1 | grep -oE '[0-9]+x[0-9]+' | head -n 1)
-  SW=${sz%x*}; SH=${sz#*x}
-  [ -n "$SW" ] || SW=1080; [ -n "$SH" ] || SH=2400
-
-  input keyevent 224 >/dev/null 2>&1 || true
-  monkey -p com.android.vending -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1
-  sleep 2
-
-  wait_tap_re() {
-    pat=$1; scroll=${2:-0}; tries=${3:-10}; i=0
-    while [ "$i" -lt "$tries" ]; do
-      uiautomator dump /data/local/tmp/omk_ui.xml >/dev/null 2>&1 || true
-      if [ -s /data/local/tmp/omk_ui.xml ]; then
-        b=$(tr '>' '\n' < /data/local/tmp/omk_ui.xml | grep -E "$pat" | head -n 1 | sed -n 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\]\[\([0-9]*\),\([0-9]*\)\]".*/\1 \2 \3 \4/p')
-        rm -f /data/local/tmp/omk_ui.xml
-        if [ -n "$b" ]; then
-          set -- $b
-          input tap $(( ($1 + $3) / 2 )) $(( ($2 + $4) / 2 ))
-          return 0
-        fi
-      fi
-      if [ "$scroll" = "1" ] && [ "$i" -ge 1 ]; then
-        input swipe $((SW / 2)) $((SH * 7 / 10)) $((SW / 2)) $((SH * 3 / 10)) 250
-      fi
-      i=$((i + 1))
-      sleep 1
-    done
-    return 1
-  }
-
-  # 1. Open Account menu (EN/RU or top-right fallback)
-  if ! wait_tap_re 'Account and settings|Аккаунт и настройки|Signed in as|Вход выполнен|Управление аккаунтом Google' 0 8; then
-    input tap $((SW * 92 / 100)) $((SH * 7 / 100))
-  fi
-  sleep 1
-
-  # 2. Settings -> General -> Developer options -> Check integrity (EN + RU)
-  wait_tap_re 'text="Settings"|text="Настройки"' 1 8 || { am force-stop com.android.vending >/dev/null 2>&1 || true; echo "RESULT_VERDICT=ERROR"; echo "RESULT_LABELS=Не найден пункт Настройки"; return 1; }
-  wait_tap_re 'text="General"|text="Общие"' 0 6 || { am force-stop com.android.vending >/dev/null 2>&1 || true; echo "RESULT_VERDICT=ERROR"; echo "RESULT_LABELS=Не найден пункт Общие"; return 1; }
-  wait_tap_re 'text="Developer options"|text="Для разработчиков"' 1 8 || { am force-stop com.android.vending >/dev/null 2>&1 || true; echo "RESULT_VERDICT=ERROR"; echo "RESULT_LABELS=Не найден пункт Для разработчиков"; return 1; }
-  wait_tap_re 'text="Check integrity"|text="Проверить целостность"' 1 8 || { am force-stop com.android.vending >/dev/null 2>&1 || true; echo "RESULT_VERDICT=ERROR"; echo "RESULT_LABELS=Не найдена кнопка Check integrity"; return 1; }
-
-  labels=""
-  fp=""
-  w=0
-  while [ "$w" -lt 12 ]; do
-    sleep 1
-    uiautomator dump /data/local/tmp/omk_ui.xml >/dev/null 2>&1 || true
-    if [ -s /data/local/tmp/omk_ui.xml ]; then
-      dump_lines=$(tr '>' '\n' < /data/local/tmp/omk_ui.xml | grep -oE 'text="[^"]+"')
-      rm -f /data/local/tmp/omk_ui.xml
-      labels=$(printf '%s\n' "$dump_lines" | grep -E 'Labels:|Метки:|MEETS_' | head -n 1 | sed 's/^text="//; s/"$//')
-      fp=$(printf '%s\n' "$dump_lines" | grep -E 'Build fingerprint:|Цифровой отпечаток:' | head -n 1 | sed 's/^text="//; s/"$//')
-      if [ -n "$labels" ]; then
-        break
-      fi
+_local_quota_read() {
+  today=$(date -u +%Y-%m-%d 2>/dev/null || echo "1970-01-01")
+  if [ -f "$QUOTA_FILE" ]; then
+    IFS='|' read -r q_day q_used q_limit <<EOF
+$(cat "$QUOTA_FILE" 2>/dev/null || true)
+EOF
+    if [ "$q_day" = "$today" ]; then
+      printf '%s|%s\n' "${q_used:-0}" "${q_limit:-10000}"
+      return 0
     fi
-    w=$((w + 1))
-  done
+  fi
+  printf '0|10000\n'
+}
 
-  # Close Play Store so user drops straight back into WebUI
-  am force-stop com.android.vending >/dev/null 2>&1 || true
+_local_quota_save() {
+  today=$(date -u +%Y-%m-%d 2>/dev/null || echo "1970-01-01")
+  mkdir -p /data/adb 2>/dev/null || true
+  printf '%s|%s|%s\n' "$today" "${1:-0}" "${2:-10000}" > "$QUOTA_FILE"
+  chmod 0600 "$QUOTA_FILE" 2>/dev/null || true
+}
 
-  verdict="NONE"
-  case "$labels" in
-    *MEETS_STRONG_INTEGRITY*) verdict="STRONG" ;;
-    *MEETS_DEVICE_INTEGRITY*) verdict="DEVICE" ;;
-    *MEETS_BASIC_INTEGRITY*) verdict="BASIC" ;;
-    "") verdict="ERROR" ;;
-  esac
+get_probe_quota() {
+  if ! ensure_probe_installed; then
+    echo "QUOTA_OK=0"
+    echo "QUOTA_ERR=OMKIntegrityProbe не установлен"
+    return 1
+  fi
+  ep=""; [ -f "$PROBE_EP_CFG" ] && ep=$(tr -d '\r\n ' < "$PROBE_EP_CFG" 2>/dev/null || echo "")
+  raw=$(content call --uri "content://${PROBE_PKG}.provider" --method quota --arg "$ep" 2>&1 || true)
+  lq=$(_local_quota_read)
+  l_used=${lq%%"|"*}
+  l_limit=${lq#*"|"}
+
+  if printf '%s' "$raw" | grep -q 'ok=true'; then
+    s_used=$(_bundle_field "$raw" used 2>/dev/null || echo "0")
+    s_limit=$(_bundle_field "$raw" limit 2>/dev/null || echo "10000")
+    s_pers=$(_bundle_field "$raw" persistentCounter 2>/dev/null || echo "false")
+    s_exh=$(_bundle_field "$raw" exhausted 2>/dev/null || echo "false")
+    if [ "$s_pers" = "true" ]; then
+      used="$s_used"
+    else
+      [ "${s_used:-0}" -gt "${l_used:-0}" ] && used="$s_used" || used="$l_used"
+    fi
+    limit="${s_limit:-$l_limit}"
+    [ "$s_exh" = "true" ] && rem=0 || { rem=$((limit - used)); [ "$rem" -lt 0 ] && rem=0; }
+    _local_quota_save "$used" "$limit"
+    echo "QUOTA_OK=1"
+    echo "QUOTA_USED=$used"
+    echo "QUOTA_LIMIT=$limit"
+    echo "QUOTA_REMAINING=$rem"
+    echo "QUOTA_PERSISTENT=$s_pers"
+    return 0
+  fi
+
+  rem=$((l_limit - l_used)); [ "$rem" -lt 0 ] && rem=0
+  echo "QUOTA_OK=1"
+  echo "QUOTA_USED=$l_used"
+  echo "QUOTA_LIMIT=$l_limit"
+  echo "QUOTA_REMAINING=$rem"
+  echo "QUOTA_PERSISTENT=false"
+}
+
+_run_probe_once() {
+  ep=$1
+  proj=$2
+
+  lq=$(_local_quota_read)
+  l_used=${lq%%"|"*}
+  l_limit=${lq#*"|"}
+  if [ "$l_used" -ge "$l_limit" ]; then
+    log_msg "Local daily safety quota reached ($l_used/$l_limit); skipping check"
+    echo "RESULT_MODE=HEADLESS"
+    echo "RESULT_VERDICT=QUOTA"
+    echo "RESULT_LABELS=Дневной лимит проверок исчерпан ($l_used/$l_limit)"
+    echo "RESULT_USED=$l_used"
+    echo "RESULT_LIMIT=$l_limit"
+    echo "RESULT_REMAINING=0"
+    return 1
+  fi
+
+  if [ -n "$ep" ] && [ -n "$proj" ]; then
+    raw_call=$(content call --uri "content://${PROBE_PKG}.provider" --method check --arg "$proj" --extra endpoint:s:"$ep" 2>&1 || true)
+  elif [ -n "$ep" ]; then
+    raw_call=$(content call --uri "content://${PROBE_PKG}.provider" --method check --arg "$ep" 2>&1 || true)
+  elif [ -n "$proj" ]; then
+    raw_call=$(content call --uri "content://${PROBE_PKG}.provider" --method check --arg "$proj" 2>&1 || true)
+  else
+    raw_call=$(content call --uri "content://${PROBE_PKG}.provider" --method check 2>&1 || true)
+  fi
+
+  if ! printf '%s' "$raw_call" | grep -q 'ok=true'; then
+    q_exh=$(_bundle_field "$raw_call" quotaExhausted 2>/dev/null || echo "false")
+    err=$(_bundle_field "$raw_call" error 2>/dev/null || echo "")
+    if [ "$q_exh" = "true" ]; then
+      s_used=$(_bundle_field "$raw_call" used 2>/dev/null || echo "$l_limit")
+      s_limit=$(_bundle_field "$raw_call" limit 2>/dev/null || echo "$l_limit")
+      _local_quota_save "$s_used" "$s_limit"
+      log_msg "Autonomous Integrity API quota exhausted ($s_used/$s_limit); skipping further requests"
+      echo "RESULT_MODE=HEADLESS"
+      echo "RESULT_VERDICT=QUOTA"
+      echo "RESULT_LABELS=Дневной лимит API исчерпан ($s_used/$s_limit)"
+      echo "RESULT_USED=$s_used"
+      echo "RESULT_LIMIT=$s_limit"
+      echo "RESULT_REMAINING=0"
+      return 1
+    fi
+    log_msg "Autonomous integrity probe failed: ${err:-$raw_call}"
+    echo "RESULT_MODE=HEADLESS"
+    echo "RESULT_VERDICT=ERROR"
+    echo "RESULT_LABELS=${err:-Ошибка автономной системы проверки}"
+    return 1
+  fi
+
+  verdict=$(_bundle_field "$raw_call" verdict 2>/dev/null || echo "NONE")
+  labels=$(_bundle_field "$raw_call" labels 2>/dev/null || echo "")
+  app_v=$(_bundle_field "$raw_call" appVerdict 2>/dev/null || echo "UNKNOWN")
+  s_used=$(_bundle_field "$raw_call" used 2>/dev/null || echo "")
+  s_limit=$(_bundle_field "$raw_call" limit 2>/dev/null || echo "$l_limit")
+  s_pers=$(_bundle_field "$raw_call" persistentCounter 2>/dev/null || echo "false")
+  [ -n "$verdict" ] || verdict="NONE"
+
+  l_next=$((l_used + 1))
+  if [ "$s_pers" = "true" ] && [ -n "$s_used" ]; then
+    eff_used="$s_used"
+  else
+    [ "${s_used:-0}" -gt "$l_next" ] && eff_used="$s_used" || eff_used="$l_next"
+  fi
+  eff_limit="${s_limit:-10000}"
+  eff_rem=$((eff_limit - eff_used)); [ "$eff_rem" -lt 0 ] && eff_rem=0
+  _local_quota_save "$eff_used" "$eff_limit"
 
   dev_now=$(read_pif_val DEVICE "$PIF_DIR/custom.pif.prop" 2>/dev/null || echo "-")
   sdk_now=$(read_pif_val DEVICE_INITIAL_SDK_INT "$PIF_DIR/custom.pif.prop" 2>/dev/null || echo "-")
-  log_msg "Play Integrity check: verdict=$verdict profile=$dev_now(SDK $sdk_now) $labels"
+  log_msg "Autonomous Integrity check: verdict=$verdict profile=$dev_now(SDK $sdk_now) labels=[$labels] quota=${eff_used}/${eff_limit}"
+
+  echo "RESULT_MODE=HEADLESS"
   echo "RESULT_VERDICT=$verdict"
   echo "RESULT_PROFILE=$dev_now (SDK $sdk_now)"
-  echo "RESULT_LABELS=${labels:-нет ответа}"
-  echo "RESULT_FP=${fp:-}"
+  echo "RESULT_LABELS=${labels:-пусто (app=$app_v)}"
+  echo "RESULT_USED=$eff_used"
+  echo "RESULT_LIMIT=$eff_limit"
+  echo "RESULT_REMAINING=$eff_rem"
+  echo "RESULT_FP=$(read_pif_val FINGERPRINT "$PIF_DIR/custom.pif.prop" 2>/dev/null || echo '')"
   [ "$verdict" = "STRONG" ] || [ "$verdict" = "DEVICE" ]
 }
 
-verify_and_autofix_fingerprint() {
-  log_msg "Starting Play Integrity check & automatic fingerprint selection..."
-  inj_state=$(grep -m1 '^enabled =' "$OMK_INJ" 2>/dev/null | awk '{print $3}')
-  want_strong=1
-  [ "$inj_state" = "false" ] && want_strong=0
+check_play_integrity() {
+  if ! ensure_probe_installed; then
+    echo "RESULT_MODE=HEADLESS"
+    echo "RESULT_VERDICT=ERROR"
+    echo "RESULT_LABELS=Не удалось установить OMKIntegrityProbe.apk"
+    return 1
+  fi
 
-  cur_out=$(check_play_integrity)
+  ep=""; [ -f "$PROBE_EP_CFG" ] && ep=$(tr -d '\r\n ' < "$PROBE_EP_CFG" 2>/dev/null || echo "")
+  proj=""; [ -f "$PROJECT_NUM_CFG" ] && proj=$(tr -d '\r\n ' < "$PROJECT_NUM_CFG" 2>/dev/null || echo "")
+
+  am force-stop com.android.vending >/dev/null 2>&1 || true
+  killall com.google.android.gms.unstable >/dev/null 2>&1 || true
+
+  rc1=0
+  out1=$(_run_probe_once "$ep" "$proj") || rc1=$?
+  v1=$(printf '%s\n' "$out1" | sed -n 's/^RESULT_VERDICT=//p' | head -n 1)
+  if [ "$v1" = "STRONG" ] || [ "$v1" = "DEVICE" ] || [ "$v1" = "ERROR" ] || [ "$v1" = "QUOTA" ]; then
+    printf '%s\n' "$out1"
+    return "$rc1"
+  fi
+
+  log_msg "Warm-up check returned $v1; waiting 3s and re-checking..."
+  sleep 3
+  _run_probe_once "$ep" "$proj"
+}
+
+verify_and_autofix_fingerprint() {
+  log_msg "Starting headless Play Integrity check & automatic fingerprint selection..."
+  inj_state=$(grep -m1 '^enabled =' "$OMK_INJ" 2>/dev/null | awk '{print $3}')
+
+  cur_out=$(check_play_integrity) || true
   cur_v=$(printf '%s\n' "$cur_out" | sed -n 's/^RESULT_VERDICT=//p' | head -n 1)
-  if [ "$cur_v" = "STRONG" ] || { [ "$want_strong" = "0" ] && [ "$cur_v" = "BASIC" ]; }; then
+  if [ "$cur_v" = "STRONG" ] || [ "$cur_v" = "DEVICE" ] || { [ "$inj_state" = "false" ] && [ "$cur_v" = "BASIC" ]; }; then
     printf '%s\n' "$cur_out"
     return 0
   fi
-  if [ "$cur_v" = "DEVICE" ] && [ "$want_strong" = "0" ]; then
+  if [ "$cur_v" = "ERROR" ] || [ "$cur_v" = "QUOTA" ]; then
     printf '%s\n' "$cur_out"
-    return 0
+    return 1
   fi
 
   best_out="$cur_out"
@@ -416,9 +642,9 @@ verify_and_autofix_fingerprint() {
     last_row="$row"
     sync_omk_config >/dev/null 2>&1 || true
     reload_omk
-    out=$(check_play_integrity)
+    out=$(check_play_integrity) || true
     v=$(printf '%s\n' "$out" | sed -n 's/^RESULT_VERDICT=//p' | head -n 1)
-    if [ "$v" = "STRONG" ]; then
+    if [ "$v" = "STRONG" ] || [ "$v" = "DEVICE" ]; then
       printf '%s\n' "$out"
       return 0
     fi
@@ -432,16 +658,12 @@ verify_and_autofix_fingerprint() {
       best_out="$out"
       best_row="$row"
     fi
-    if [ "$v" = "DEVICE" ] && [ "$want_strong" = "0" ]; then
-      printf '%s\n' "$out"
-      return 0
-    fi
     IFS='
 '
   done
   IFS="$old_ifs"
 
-  if [ "$best_row" != "$last_row" ] && [ -n "${best_row%%|*}" ]; then
+  if [ "$best_row" != "$last_row" ] && [ -n "${best_row%%"|"*}" ]; then
     d=$(printf '%s' "$best_row" | cut -d'|' -f1)
     p=$(printf '%s' "$best_row" | cut -d'|' -f2)
     m=$(printf '%s' "$best_row" | cut -d'|' -f3)
@@ -666,8 +888,9 @@ install_keybox_file() {
   [ -f "$TS_DIR/keybox.xml" ] && cp -f "$TS_DIR/keybox.xml" "$TS_DIR/keybox.xml.bak"
   cp -f "$src_xml" "$TS_DIR/keybox.xml"
   chmod 0600 "$TS_DIR/keybox.xml"
-  set_omk_injector_enabled true
+  set_omk_injector_enabled true || return 1
   set_pif_prop spoofProvider 0
+  return 0
 }
 
 fetch_specter_keybox() {
@@ -826,7 +1049,7 @@ update_keybox() {
   if [ "${FORCE_KEYBOX:-0}" != "1" ] && [ -f /data/adb/omk_pif_sync_keep_keybox ]; then
     log_msg "Keeping local keybox (/data/adb/omk_pif_sync_keep_keybox present)"
     if validate_keybox_file "$OMK_KEYBOX"; then
-      set_omk_injector_enabled true
+      set_omk_injector_enabled true || return 1
       set_pif_prop spoofProvider 0
       return 0
     fi
@@ -838,48 +1061,34 @@ update_keybox() {
     return 1
   fi
 
-  provider=$(cat "$PROVIDER_CFG" 2>/dev/null | tr -d '\r\n' || echo "auto")
+  provider=""
+  [ -f "$PROVIDER_CFG" ] && provider=$(tr -d '\r\n' < "$PROVIDER_CFG" 2>/dev/null || echo "")
   [ -n "$provider" ] || provider="auto"
   dec_file="/data/local/tmp/omk_keybox_new.xml.$$"
 
   refresh_crl_cache 1 || true
 
+  fetched=0
   case "$provider" in
-    specter)
-      if fetch_specter_keybox "$dec_file"; then
-        install_keybox_file "$dec_file"; rm -f "$dec_file"; return 0
-      fi
-      ;;
-    meowdump)
-      if fetch_meowdump_keybox "$dec_file"; then
-        install_keybox_file "$dec_file"; rm -f "$dec_file"; return 0
-      fi
-      ;;
-    yurikey)
-      if fetch_yurikey_keybox "$dec_file"; then
-        install_keybox_file "$dec_file"; rm -f "$dec_file"; return 0
-      fi
-      ;;
-    custom)
-      if fetch_custom_url_keybox "$dec_file"; then
-        install_keybox_file "$dec_file"; rm -f "$dec_file"; return 0
-      fi
-      ;;
+    specter) fetch_specter_keybox "$dec_file" && fetched=1 ;;
+    meowdump) fetch_meowdump_keybox "$dec_file" && fetched=1 ;;
+    yurikey) fetch_yurikey_keybox "$dec_file" && fetched=1 ;;
+    custom) fetch_custom_url_keybox "$dec_file" && fetched=1 ;;
     auto|*)
-      if [ -s "$CUSTOM_URL_CFG" ] && fetch_custom_url_keybox "$dec_file"; then
-        install_keybox_file "$dec_file"; rm -f "$dec_file"; return 0
-      fi
-      if fetch_specter_keybox "$dec_file"; then
-        install_keybox_file "$dec_file"; rm -f "$dec_file"; return 0
-      fi
-      if fetch_meowdump_keybox "$dec_file"; then
-        install_keybox_file "$dec_file"; rm -f "$dec_file"; return 0
-      fi
-      if fetch_yurikey_keybox "$dec_file"; then
-        install_keybox_file "$dec_file"; rm -f "$dec_file"; return 0
+      if [ -s "$CUSTOM_URL_CFG" ] && fetch_custom_url_keybox "$dec_file"; then fetched=1
+      elif fetch_specter_keybox "$dec_file"; then fetched=1
+      elif fetch_meowdump_keybox "$dec_file"; then fetched=1
+      elif fetch_yurikey_keybox "$dec_file"; then fetched=1
       fi
       ;;
   esac
+
+  if [ "$fetched" -eq 1 ]; then
+    install_keybox_file "$dec_file"
+    ins_rc=$?
+    rm -f "$dec_file"
+    return "$ins_rc"
+  fi
 
   rm -f "$dec_file"
   log_msg "WARN: All keybox providers ($provider) returned revoked/expired or unreachable keyboxes"
@@ -897,15 +1106,20 @@ toml_set_in_section() {
   section=$2
   key=$3
   val=$4
-  tmp="${file}.tmp.$$"
+  [ -f "$file" ] || return 1
+  orig_val=$(toml_get_in_section "$file" "$section" "$key" 2>/dev/null || echo "<ABSENT>")
+  dir=${file%/*}
+  base=${file##*/}
+  tmp="${dir}/.${base}.tmp.$$"
   awk -v sec="[$section]" -v k="$key" -v v="$val" '
     BEGIN { in_sec=0; done_key=0 }
-    /^\[.*\]/ {
+    /^[[:space:]]*\[.*\][[:space:]]*$/ {
       if (in_sec && !done_key) {
         print k " = \"" v "\""
         done_key=1
       }
-      in_sec = ($0 == sec)
+      cur=$0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", cur)
+      in_sec = (cur == sec)
       print
       next
     }
@@ -922,13 +1136,17 @@ toml_set_in_section() {
         print k " = \"" v "\""
       }
     }
-  ' "$file" > "$tmp" && mv "$tmp" "$file"
+  ' "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
+  atomic_replace_omk_file "$file" "$tmp" 0660 || return 1
+  record_omk_state "$file" "$section" "$key" "$orig_val" "$val"
 }
 
 ensure_injector_scoop() {
   [ -f "$OMK_INJ" ] || return 0
   if ! grep -q '"io.github.vvb2060.keyattestation"' "$OMK_INJ"; then
-    tmp="${OMK_INJ}.tmp.$$"
+    dir=${OMK_INJ%/*}
+    base=${OMK_INJ##*/}
+    tmp="${dir}/.${base}.tmp.$$"
     awk '
       /^scoop = \[/ && !added {
         print
@@ -937,11 +1155,11 @@ ensure_injector_scoop() {
         next
       }
       { print }
-    ' "$OMK_INJ" > "$tmp" && mv "$tmp" "$OMK_INJ"
+    ' "$OMK_INJ" > "$tmp" || { rm -f "$tmp"; return 1; }
+    atomic_replace_omk_file "$OMK_INJ" "$tmp" 0600 || return 1
+    record_omk_state "$OMK_INJ" "" "scoop_ka" "<ABSENT>" "present"
     log_msg "Added io.github.vvb2060.keyattestation to $OMK_INJ"
   fi
-  chown 1017:1017 "$OMK_INJ"
-  chmod 0600 "$OMK_INJ"
 }
 
 sync_boot_hash() {

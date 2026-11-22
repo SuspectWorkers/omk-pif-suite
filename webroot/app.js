@@ -10,6 +10,7 @@
   const NO_TANGOR_FLAG = '/data/adb/omk_pif_sync_no_tangorpro';
   const PROVIDER_CFG = '/data/adb/omk_pif_sync_provider';
   const CUSTOM_URL_CFG = '/data/adb/omk_pif_sync_keybox_url';
+  const QUOTA_FILE = '/data/adb/omk_probe_quota.dat';
   const SYNC_LOG = '/data/local/tmp/omk_pif_sync.log';
   const MODE_KEY = 'omk_pif_suite_mode';
 
@@ -387,18 +388,54 @@
     document.getElementById('btnSave').classList.toggle('hidden', !isPro);
   }
 
+  function updateQuotaUi(used, limit, remaining) {
+    const qEl = document.getElementById('stQuota');
+    if (!qEl) return;
+    const u = Number(used || 0);
+    const l = Number(limit || 10000);
+    const r = remaining !== undefined ? Number(remaining) : Math.max(0, l - u);
+    qEl.textContent = `${u} / ${l} (ост. ${r})`;
+    qEl.className = 'stat-v ' + (r <= 0 ? 'badge-bad' : (r < 500 ? 'badge-warn' : 'badge-ok'));
+  }
+
+  async function refreshQuota(showPopup = false) {
+    try {
+      const res = await execRoot(`. "${SUITE_DIR}/common.sh" && get_probe_quota`);
+      const map = {};
+      res.stdout.split('\n').forEach(l => {
+        const i = l.indexOf('=');
+        if (i > 0) map[l.slice(0, i)] = l.slice(i + 1).trim();
+      });
+      if (map.QUOTA_OK === '1') {
+        updateQuotaUi(map.QUOTA_USED, map.QUOTA_LIMIT, map.QUOTA_REMAINING);
+        const rem = Number(map.QUOTA_REMAINING || 0);
+        const msg = `Использовано сегодня: ${map.QUOTA_USED} из ${map.QUOTA_LIMIT} • Осталось: ${rem}`;
+        if (showPopup) {
+          log('Лимит автономной системы: ' + msg);
+          showResultOverlay(rem > 0, rem > 0 ? 'Запас проверок в норме' : 'Лимит проверок исчерпан', msg, 3000);
+        }
+      } else if (showPopup) {
+        showResultOverlay(false, 'Ошибка запроса квоты', map.QUOTA_ERR || 'Нет ответа', 3000);
+      }
+    } catch (e) {
+      if (showPopup) log('Квота: ' + e.message);
+    }
+  }
+
   async function loadStatus() {
     try {
       const res = await execRoot(
         `echo "PIF=$(grep -m1 ^version= ${PIF_DIR}/module.prop 2>/dev/null | cut -d= -f2)"\n` +
         `echo "OMK=$(grep -m1 ^version= /data/adb/modules/oh_my_keymint/module.prop 2>/dev/null | cut -d= -f2)"\n` +
-        `echo "INJ=$(grep -m1 '^enabled =' ${OMK_INJ} 2>/dev/null | awk '{print $3}')"\n` +
+        `echo "INJ=$(. "${SUITE_DIR}/common.sh" && toml_get_in_section "${OMK_INJ}" main enabled 2>/dev/null || echo '?')"\n` +
+        `echo "FILT=$(. "${SUITE_DIR}/common.sh" && toml_verify_injector_safe "${OMK_INJ}" >/dev/null 2>&1 && echo safe || echo unsafe)"\n` +
         `echo "PATCH=$(getprop ro.build.version.security_patch)"\n` +
         `echo "FAPI=$(getprop ro.product.first_api_level)"\n` +
         `echo "KEEPKB=$([ -f ${KEEP_KB_FLAG} ] && echo 1 || echo 0)"\n` +
         `echo "NOTANG=$([ -f ${NO_TANGOR_FLAG} ] && echo 1 || echo 0)"\n` +
-        `echo "PROV=$(cat ${PROVIDER_CFG} 2>/dev/null | tr -d '\\r\\n')"\n` +
-        `echo "CURL=$(cat ${CUSTOM_URL_CFG} 2>/dev/null | tr -d '\\r\\n')"\n` +
+        `echo "PROV=$([ -f ${PROVIDER_CFG} ] && cat ${PROVIDER_CFG} 2>/dev/null | tr -d '\\r\\n')"\n` +
+        `echo "CURL=$([ -f ${CUSTOM_URL_CFG} ] && cat ${CUSTOM_URL_CFG} 2>/dev/null | tr -d '\\r\\n')"\n` +
+        `echo "QUOTA=$([ -f ${QUOTA_FILE} ] && cat ${QUOTA_FILE} 2>/dev/null | tr -d '\\r\\n')"\n` +
         `echo "KB=$([ -s ${OMK_KEYBOX} ] && echo present || echo missing)"`
       );
       const map = {};
@@ -409,8 +446,9 @@
       const dev = state.build.DEVICE || '-';
       document.getElementById('stPif').textContent = `${map.PIF || 'нет'} (${dev})`;
       const omkEl = document.getElementById('stOmk');
-      omkEl.textContent = `${map.OMK || 'нет'} (${map.INJ === 'false' ? 'off' : 'on'})`;
-      omkEl.className = 'stat-v ' + (map.INJ === 'false' ? 'badge-warn' : '');
+      const injState = map.INJ === 'false' ? 'off' : (map.INJ === 'true' ? 'on' : '?');
+      omkEl.textContent = `${map.OMK || 'нет'} (${injState}${map.FILT === 'unsafe' ? ', unsafe!' : ''})`;
+      omkEl.className = 'stat-v ' + (map.FILT === 'unsafe' ? 'badge-bad' : (map.INJ === 'false' ? 'badge-warn' : ''));
       const kbEl = document.getElementById('stKeybox');
       if (map.KB !== 'present') {
         kbEl.textContent = 'отсутствует';
@@ -420,6 +458,12 @@
         kbEl.className = 'stat-v';
       }
       document.getElementById('stRomPatch').textContent = `${map.PATCH || '-'} / API ${map.FAPI || '-'}`;
+      if (map.QUOTA && map.QUOTA.includes('|')) {
+        const [, qUsed, qLimit] = map.QUOTA.split('|');
+        updateQuotaUi(qUsed, qLimit);
+      } else {
+        updateQuotaUi(0, 10000);
+      }
       document.getElementById('chkKeepKeybox').checked = map.KEEPKB === '1';
       document.getElementById('chkNoTangorpro').checked = map.NOTANG === '1';
       const provSel = document.getElementById('selProvider');
@@ -567,11 +611,19 @@
         const res = await execRoot(cmd);
         const out = (res.stdout + '\n' + res.stderr).trim();
         log(out || `Готово (код ${res.code})`);
-        toast(`${label}: ${res.code === 0 ? 'OK' : 'код ' + res.code}`);
         if (reloadAfter) {
           await loadConfig();
           await loadStatus();
         }
+        if (res.code !== 0) {
+          toast(`${label}: ошибка (код ${res.code})`);
+          if (showOverlay) {
+            const tail = out ? out.split('\n').slice(-2).join(' • ') : `Код выхода: ${res.code}`;
+            crlResult = { valid: false, title: `Ошибка: ${label}`, subtitle: tail };
+          }
+          return;
+        }
+        toast(`${label}: OK`);
         if (checkCrl) {
           crlResult = await checkKeyboxCrl({ silent: false, autoFallbackOnRevoked });
         }
@@ -656,10 +708,10 @@
 
   async function runPlayStoreVerify(autoFix) {
     let overlay = null;
-    const title = autoFix ? 'Проверка и автоподбор фингерпринта' : 'Проверка Play Integrity (Play Store)';
+    const title = autoFix ? 'Проверка и автоподбор фингерпринта' : 'Проверка Play Integrity';
     const sub = autoFix
-      ? 'Открываем Play Store и проверяем реальный вердикт (при BASIC — пробуем другие Pixel профили)...'
-      : 'Открываем Play Store Developer options → Check integrity...';
+      ? 'Автономная фоновая проверка Integrity (при неудаче — автоподбор Pixel профиля)...'
+      : 'Запрос к собственной автономной системе проверки Integrity...';
     await withLoading(title, sub, async () => {
       log(`Запуск: ${title}...`);
       try {
@@ -678,6 +730,10 @@
         const labels = map.RESULT_LABELS || '';
         const passed = v === 'STRONG' || v === 'DEVICE';
 
+        if (map.RESULT_USED !== undefined) {
+          updateQuotaUi(map.RESULT_USED, map.RESULT_LIMIT, map.RESULT_REMAINING);
+        }
+
         await loadConfig();
         await loadStatus();
 
@@ -685,7 +741,9 @@
           valid: passed,
           title: v === 'STRONG'
             ? 'MEETS_STRONG_INTEGRITY'
-            : (v === 'DEVICE' ? 'MEETS_DEVICE_INTEGRITY' : `Play Integrity: ${v}`),
+            : (v === 'DEVICE'
+              ? 'MEETS_DEVICE_INTEGRITY'
+              : (v === 'QUOTA' ? 'Лимит проверок исчерпан' : `Play Integrity: ${v}`)),
           subtitle: `Профиль: ${prof} • ${labels}`
         };
       } catch (e) {
@@ -729,6 +787,10 @@
       await execRoot(`mkdir -p /data/adb && printf '%s' '${b64}' | base64 -d > "${CUSTOM_URL_CFG}"`);
       log(`Custom Keybox URL сохранён: ${url || '(пусто)'}`);
       toast('URL провайдера сохранён');
+    });
+
+    document.getElementById('btnBasicQuota').addEventListener('click', () => {
+      withLoading('Запрос запаса проверок', 'Сверяем дневной счётчик автономной системы...', () => refreshQuota(true));
     });
 
     document.getElementById('chkKeepKeybox').addEventListener('change', e => toggleFlag(KEEP_KB_FLAG, e.target.checked, 'keep_keybox'));

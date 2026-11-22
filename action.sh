@@ -25,19 +25,20 @@ if [ "$kb_ok" -ne 0 ]; then
   validate_keybox_file "$OMK_KEYBOX"
   v_rc=$?
   if [ "$v_rc" -eq 1 ]; then
-    enable_basic_fallback
+    enable_basic_fallback || exit 1
     log_msg "Action complete (basic=$BASIC_MODE, fallback=BASIC)"
   else
-    set_omk_injector_enabled true
+    set_omk_injector_enabled true || { reload_omk; log_msg "ERROR: OMK injector filter unsafe"; exit 1; }
     set_pif_prop spoofProvider 0
     reload_omk
     cleanup_google
     log_msg "Action complete (basic=$BASIC_MODE, keybox=KEPT_OFFLINE)"
   fi
 else
-  set_omk_injector_enabled true
+  set_omk_injector_enabled true || { reload_omk; log_msg "ERROR: OMK injector filter unsafe"; exit 1; }
   set_pif_prop spoofProvider 0
   reload_omk
   cleanup_google
+  verify_and_autofix_fingerprint >>"$LOG_FILE" 2>&1 || true
   log_msg "Action complete (basic=$BASIC_MODE, keybox=VALID)"
 fi

@@ -56,6 +56,7 @@
         <div class="stat"><span class="stat-k">OhMyKeymint</span><span class="stat-v" id="stOmk">...</span></div>
         <div class="stat"><span class="stat-k">Keybox (CRL)</span><span class="stat-v" id="stKeybox">...</span></div>
         <div class="stat"><span class="stat-k">ROM Patch / API</span><span class="stat-v" id="stRomPatch">...</span></div>
+        <div class="stat"><span class="stat-k">Проверок сегодня</span><span class="stat-v" id="stQuota">...</span></div>
       </div>
       <div class="expiry-note" id="metaNote">Загрузка...</div>
     </section>
@@ -64,9 +65,8 @@
     <section id="basicPanel" class="card basic-hero">
       <h2>Автоматическая настройка Play Integrity</h2>
       <p>
-        Скачивает свежий Canary-профиль, автоматически подбирает устройство под версию Android устройства (A13–A17+),
-        включает <code>spoofBuild</code>, <code>spoofProps</code>, <code>spoofVendingFinger</code>,
-        ищет живой keybox по всем провайдерам (<strong>Specter/TAKR</strong>, <strong>MeowDump</strong>, <strong>Yurikey</strong>) с проверкой Google CRL — и автоматически включает режим <strong>BASIC</strong>, если все keybox отозваны.
+        Использует <strong>собственную автономную систему проверки Integrity</strong> полностью в фоне (без запуска Play Store),
+        подбирает Pixel Canary под версию Android (A13–A17+), ищет живой keybox по всем провайдерам (<strong>Specter/TAKR</strong>, <strong>MeowDump</strong>, <strong>Yurikey</strong>) с проверкой Google CRL и автоматически включает режим <strong>BASIC</strong>, если все keybox отозваны.
       </p>
       <button class="btn btn-primary btn-hero" id="btnBasicFix">
         Исправить Play Integrity (Full Sync)
@@ -74,6 +74,7 @@
       <div class="basic-subactions">
         <button class="btn btn-accent" id="btnBasicVerifyPi">Проверить Integrity + Автоподбор</button>
         <button class="btn btn-chip" id="btnBasicCheckCrl">Проверить Keybox (CRL)</button>
+        <button class="btn btn-chip" id="btnBasicQuota">Запас проверок</button>
         <button class="btn btn-chip" id="btnBasicFallback">Режим только BASIC (без keybox)</button>
         <button class="btn btn-chip" id="btnToggleKeyboxBox">Вставить свой keybox.xml</button>
       </div>
@@ -153,7 +154,7 @@
         </div>
         <div class="actions-row">
           <button class="btn btn-accent" id="btnOmkSync">Full Sync (action.sh)</button>
-          <button class="btn btn-primary" id="btnProCheckPi">Проверить Integrity (Play Store)</button>
+          <button class="btn btn-primary" id="btnProCheckPi">Проверить Integrity</button>
           <button class="btn btn-accent" id="btnProAutoPick">Автоподбор фингерпринта</button>
           <button class="btn btn-accent" id="btnSyncLocal">Синхр. PIF → OMK</button>
           <button class="btn btn-secondary" id="btnAutopif">autopif4 (-m)</button>
