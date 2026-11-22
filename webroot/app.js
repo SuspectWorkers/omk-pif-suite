@@ -468,6 +468,28 @@
       const injState = map.INJ === 'false' ? 'off' : (map.INJ === 'true' ? 'on' : '?');
       omkEl.textContent = `${map.OMK || 'нет'} (${injState}${map.FILT === 'unsafe' ? ', unsafe!' : ''})`;
       omkEl.className = 'stat-v ' + (map.FILT === 'unsafe' ? 'badge-bad' : (map.INJ === 'false' ? 'badge-warn' : ''));
+      const powerStage = document.getElementById('powerStage');
+      const autoDot = document.getElementById('autoStateDot');
+      const autoText = document.getElementById('autoStateText');
+      const autoBtnLbl = document.getElementById('autoBtnLabel');
+      if (powerStage && autoDot && autoText) {
+        powerStage.classList.remove('is-on', 'is-basic');
+        autoDot.classList.remove('is-on', 'is-basic');
+        if (map.INJ === 'true' && map.FILT === 'safe' && map.KB === 'present') {
+          powerStage.classList.add('is-on');
+          autoDot.classList.add('is-on');
+          autoText.textContent = `Активно • ${dev}`;
+          if (autoBtnLbl) autoBtnLbl.textContent = 'ON';
+        } else if (map.INJ === 'false') {
+          powerStage.classList.add('is-basic');
+          autoDot.classList.add('is-basic');
+          autoText.textContent = `Режим BASIC • ${dev}`;
+          if (autoBtnLbl) autoBtnLbl.textContent = 'BASIC';
+        } else {
+          autoText.textContent = 'Требуется настройка';
+          if (autoBtnLbl) autoBtnLbl.textContent = 'AUTO';
+        }
+      }
       const kbEl = document.getElementById('stKeybox');
       if (map.KB !== 'present') {
         kbEl.textContent = 'отсутствует';

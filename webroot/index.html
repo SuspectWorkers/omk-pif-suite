@@ -64,14 +64,24 @@
 
     <!-- AUTO MODE -->
     <section id="autoPanel" class="card auto-hero">
-      <h2>Автоматическая настройка Play Integrity</h2>
-      <p>
-        Один клик запускает полный цикл: обновление Canary, поиск живого keybox с проверкой Google CRL,
-        автономную проверку Play Integrity с подбором фингерпринта (A13–A17+) и автоматический откат на BASIC при необходимости.
+      <div class="auto-state-pill">
+        <span class="auto-dot" id="autoStateDot"></span>
+        <span id="autoStateText">Готово к запуску AUTO</span>
+      </div>
+      <div class="power-stage" id="powerStage">
+        <div class="power-halo"></div>
+        <div class="power-ring"></div>
+        <button class="power-btn" id="btnAutoRun" type="button" aria-label="Включить Play Integrity">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 2v10" />
+            <path d="M18.36 6.64a9 9 0 1 1-12.73 0" />
+          </svg>
+          <span class="power-btn-label" id="autoBtnLabel">AUTO</span>
+        </button>
+      </div>
+      <p id="autoSubHint">
+        Нажмите кнопку — модуль сам обновит Canary, найдёт живой keybox, подберёт рабочий фингерпринт и проверит Play Integrity.
       </p>
-      <button class="btn btn-primary btn-hero" id="btnAutoRun">
-        Включить Play Integrity (AUTO)
-      </button>
     </section>
 
     <!-- PRO MODE -->

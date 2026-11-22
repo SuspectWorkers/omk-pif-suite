@@ -1,5 +1,9 @@
 # OMK PIF Suite Changelog
 
+## v1.8.1
+- Redesigned `AUTO` mode with a centered VPN-style animated power button reflecting live protection status (`ON` / `BASIC` / `AUTO`).
+- Rewrote project documentation (`README.md` + `README.ru.md`) with a clean English/Russian switcher.
+
 ## v1.8.0
 - Added module auto-update (`updateJson` + `update.json`).
 - Renamed `Basic` mode to **`AUTO`** and simplified it to one centered full-action button (all manual tools moved cleanly to **`PRO`**).
