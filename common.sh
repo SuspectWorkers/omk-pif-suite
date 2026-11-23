@@ -1252,25 +1252,87 @@ toml_set_in_section() {
 }
 
 ensure_injector_scoop() {
-  local dir base tmp
+  local dir base tmp pkg pkgs_raw desired_list missing_any block_file cur_scoop
   [ -f "$OMK_INJ" ] || return 0
-  if ! grep -q '"io.github.vvb2060.keyattestation"' "$OMK_INJ"; then
-    dir=${OMK_INJ%/*}
-    base=${OMK_INJ##*/}
-    tmp="${dir}/.${base}.tmp.$$"
-    awk '
-      /^scoop = \[/ && !added {
-        print
-        print "  \"io.github.vvb2060.keyattestation\","
-        added=1
-        next
-      }
-      { print }
-    ' "$OMK_INJ" > "$tmp" || { rm -f "$tmp"; return 1; }
-    atomic_replace_omk_file "$OMK_INJ" "$tmp" 0600 || return 1
-    record_omk_state "$OMK_INJ" "" "scoop_ka" "<ABSENT>" "present"
-    log_msg "Added io.github.vvb2060.keyattestation to $OMK_INJ"
+  grep -q '^[[:space:]]*scoop[[:space:]]*=' "$OMK_INJ" 2>/dev/null || return 0
+
+  pkgs_raw="io.github.vvb2060.keyattestation
+com.eltavine.duckdetector
+com.google.android.gms
+com.android.vending
+com.google.android.gsf
+com.omk.integrityprobe"
+
+  if [ "$(getprop sys.boot_completed 2>/dev/null)" = "1" ]; then
+    pkgs_raw="$pkgs_raw
+$(pm list packages -3 2>/dev/null | sed 's/^package://' | tr -d '\r' || true)"
   fi
+
+  desired_list=$(printf '%s\n' "$pkgs_raw" \
+    | grep -E '^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)+$' \
+    | grep -Ev '^(com\.tablet\.sysmon|me\.weishu\.kernelsu|com\.rifsxd\.ksunext|org\.bakasu\..*|io\.github\.vvb2060\.magisk|me\.bmax\.apatch)$' \
+    | sort -u)
+
+  # Preserve any user-added scoop entries that already exist in injector.toml
+  cur_scoop=$(awk '
+    /^scoop[[:space:]]*=[[:space:]]*\[/ { in_s=1; next }
+    in_s && /\]/ { in_s=0; exit }
+    in_s {
+      gsub(/^[[:space:]]*"|"[[:space:]]*,?[[:space:]]*$/, "")
+      if (length($0) > 0 && $0 !~ /^#/) print
+    }
+  ' "$OMK_INJ" 2>/dev/null || true)
+
+  if [ -n "$cur_scoop" ]; then
+    desired_list=$(printf '%s\n%s\n' "$cur_scoop" "$desired_list" \
+      | grep -E '^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)+$' \
+      | sort -u)
+  fi
+
+  missing_any=0
+  for pkg in $desired_list; do
+    if ! printf '%s\n' "$cur_scoop" | grep -Fxq "$pkg"; then
+      missing_any=1
+      break
+    fi
+  done
+
+  [ "$missing_any" = "0" ] && return 0
+
+  dir=${OMK_INJ%/*}
+  base=${OMK_INJ##*/}
+  tmp="${dir}/.${base}.tmp.$$"
+  block_file="/data/local/tmp/omk_scoop.$$"
+  : > "$block_file"
+  for pkg in $desired_list; do
+    printf '  "%s",\n' "$pkg" >> "$block_file"
+  done
+
+  awk -v bf="$block_file" '
+    /^scoop[[:space:]]*=[[:space:]]*\[/ && !done {
+      print "scoop = ["
+      while ((getline line < bf) > 0) print line
+      close(bf)
+      print "]"
+      in_s=1
+      done=1
+      next
+    }
+    in_s {
+      if (/\]/) in_s=0
+      next
+    }
+    { print }
+  ' "$OMK_INJ" > "$tmp" || { rm -f "$tmp" "$block_file"; return 1; }
+  rm -f "$block_file"
+
+  if ! toml_verify_injector_safe "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  atomic_replace_omk_file "$OMK_INJ" "$tmp" 0600 || return 1
+  OMK_SCOOP_UPDATED=1
+  log_msg "Updated OMK scoop with all user apps ($(printf '%s\n' "$desired_list" | wc -l) packages)"
 }
 
 sync_boot_hash() {

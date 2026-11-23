@@ -1,5 +1,9 @@
 # OMK PIF Suite Changelog
 
+## v1.8.4
+- Automatically populates Oh My KeyMint `scoop` in `injector.toml` with all installed user apps (`pm list packages -3`, excluding root managers) while keeping `[filter]` `block_android_package = true` and `allow_unknown_package = false` intact so every user app receives the emulated locked-bootloader TEE.
+- Updated boot sync (`service.sh`) to preserve working fingerprints and live keyboxes on reboot instead of overwriting them unconditionally.
+
 ## v1.8.3
 - Fixed critical `mksh` dynamic variable scoping bug in `common.sh` (`_write_injector_main_enabled` / `toml_verify_injector_safe`) that prevented `[main].enabled = true` from being written to `/data/misc/keystore/omk/injector.toml`.
 - Added atomic PID locking (`omk_action.lock.d`) in `action.sh` and single-flight/re-attach guards in WebUI (`app.js`) so two `action.sh` or verification runs cannot execute concurrently.

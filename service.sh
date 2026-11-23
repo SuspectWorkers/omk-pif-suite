@@ -31,10 +31,14 @@ MODDIR="${0%/*}"
   if [ "$online" -eq 1 ]; then
     OLD_PIF=$(sha256sum "$PIF_DIR/custom.pif.prop" 2>/dev/null | awk '{print $1}')
     OLD_KB=$(sha256sum "$OMK_KEYBOX" 2>/dev/null | awk '{print $1}')
-    run_pif
-    if ! update_keybox; then
-      validate_keybox_file "$OMK_KEYBOX"
-      [ "$?" -eq 1 ] && enable_basic_fallback
+    [ -f "$PIF_DIR/custom.pif.prop" ] || run_pif
+    refresh_crl_cache 1 || true
+    kb_rc=1
+    [ -s "$OMK_KEYBOX" ] && { validate_keybox_file "$OMK_KEYBOX"; kb_rc=$?; }
+    if [ "$kb_rc" -eq 1 ]; then
+      if ! update_keybox; then
+        enable_basic_fallback
+      fi
     fi
     NEW_PIF=$(sha256sum "$PIF_DIR/custom.pif.prop" 2>/dev/null | awk '{print $1}')
     NEW_KB=$(sha256sum "$OMK_KEYBOX" 2>/dev/null | awk '{print $1}')

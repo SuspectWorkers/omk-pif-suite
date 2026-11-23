@@ -34,7 +34,7 @@ Unlike TrickyStore, **Oh My KeyMint** acts as a full TEE partition emulator rath
    Scans **Specter**, **MeowDump**, **Yurikey**, or your custom URL in order. Every certificate in the chain is checked for expiry and verified against Google's live CRL (`android.googleapis.com/attestation/status`) before it ever touches your system. If every public keybox is revoked, the module drops cleanly to `BASIC` mode instead of leaving you with `Labels: []`.
 
 3. **Auto-sync with Oh My KeyMint**
-   Writes matching `brand`, `device`, `manufacturer`, `model`, `product`, `vb_hash`, and all 4 security patch fields into `config.toml`, clears stale Play Store attestation cache, and reloads OMK.
+   Writes matching `brand`, `device`, `manufacturer`, `model`, `product`, `vb_hash`, and all 4 security patch fields into `config.toml`, automatically adds all installed user apps to `injector.toml` `scoop` (while keeping `system_server` / system packages safely blocked), clears stale Play Store attestation cache, and reloads OMK.
 
 4. **Proprietary autonomous Integrity verification**
    Checks your real Play Integrity verdict silently in the background (no opening Play Store, no screen tapping, no third-party checker apps, automatic `-8` throttle counter reset) and shows Basic, Device, and Strong status right on screen.

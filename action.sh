@@ -66,8 +66,12 @@ if [ "$AUTO_MODE" = "1" ]; then
   pif_dev=$(read_pif_val DEVICE "$PIF_DIR/custom.pif.prop" 2>/dev/null || echo "")
   omk_dev=$(toml_get_in_section "$OMK_CFG" device device 2>/dev/null || echo "")
 
+  OMK_SCOOP_UPDATED=0
+  ensure_injector_scoop || true
+
   if [ "$kb_live" -ge 1 ] && [ -f "$PIF_DIR/custom.pif.prop" ]; then
     need_reload=0
+    [ "$OMK_SCOOP_UPDATED" = "1" ] && need_reload=1
     if [ "$inj_now" != "true" ]; then
       trace_msg "Обнаружен выключенный OMK injector — включаем обратно..."
       set_omk_injector_enabled true || { reload_omk; trace_msg "ОШИБКА: небезопасный фильтр OMK"; exit 1; }
